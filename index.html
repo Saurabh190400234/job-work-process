@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Job Work Process Control</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js" defer></script>
+    <script src="app.js?v=20260512-sales-module" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">JW</div>
+        <div>
+          <strong>Job Work Control</strong>
+          <span>Steel bar to component flow</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="dashboard">
+          <i data-lucide="layout-dashboard"></i>
+          Dashboard
+        </button>
+        <button class="nav-item" data-view="masters">
+          <i data-lucide="database"></i>
+          Masters
+        </button>
+        <button class="nav-item" data-view="grn">
+          <i data-lucide="clipboard-check"></i>
+          GRN
+        </button>
+        <button class="nav-item" data-view="vendor">
+          <i data-lucide="factory"></i>
+          Vendor
+        </button>
+        <button class="nav-item" data-view="schedule">
+          <i data-lucide="calendar-days"></i>
+          Customer Schedule
+        </button>
+        <button class="nav-item" data-view="sales">
+          <i data-lucide="receipt-indian-rupee"></i>
+          Sales
+        </button>
+        <button class="nav-item" data-view="planning">
+          <i data-lucide="clipboard-list"></i>
+          Purchase Plan
+        </button>
+        <button class="nav-item" data-view="flowStatus">
+          <i data-lucide="git-branch"></i>
+          Flow Status
+        </button>
+      </nav>
+    </aside>
+
+    <main class="main">
+
+      <section class="view active" id="dashboard">
+  <div class="dashboard-hero">
+    <div>
+      <p class="eyebrow">Steel Operations</p>
+      <h1>Job Work Process Tracker</h1>
+      <p>Real-time overview of BOS GRN, vendor processing, component readiness and dispatch risk.</p>
+    </div>
+
+    <div class="dashboard-filters">
+      <button class="dash-filter">
+        <i data-lucide="calendar-days"></i>
+        <span id="dashboardToday">Today</span>
+      </button>
+      <button class="dash-filter">
+        <i data-lucide="factory"></i>
+        All Vendors
+      </button>
+    </div>
+  </div>
+
+  <div class="ops-kpi-grid" id="opsKpiGrid"></div>
+
+  <section class="ops-panel">
+    <div class="ops-panel-header">
+      <div>
+        <h2>Operations Pipeline</h2>
+        <p>Complete flow from BOS raw stock to customer sale.</p>
+      </div>
+      <div class="pipeline-legend">
+        <span><i class="dot ok-dot"></i> On Track</span>
+        <span><i class="dot warn-dot"></i> At Risk</span>
+        <span><i class="dot danger-dot"></i> Delayed</span>
+      </div>
+    </div>
+
+    <div class="pipeline-board" id="pipelineBoard"></div>
+  </section>
+
+  <div class="dashboard-analytics-grid">
+    <section class="ops-panel">
+      <div class="ops-panel-header">
+        <div>
+          <h2>Production Trend</h2>
+          <p>Last 7 days received, inward and actual customer sale movement.</p>
+        </div>
+      </div>
+      <div id="productionTrend" class="trend-chart"></div>
+      <div class="trend-summary" id="trendSummary"></div>
+    </section>
+
+    <section class="ops-panel">
+      <div class="ops-panel-header">
+        <div>
+          <h2>Schedule Risk Overview</h2>
+          <p>Customer schedule status based on due date and ready stock.</p>
+        </div>
+      </div>
+      <div class="risk-layout">
+        <div class="risk-donut" id="riskDonut">
+          <strong>0</strong>
+          <span>Schedules</span>
+        </div>
+        <div class="risk-list" id="riskList"></div>
+      </div>
+      <div class="risk-note" id="riskNote"></div>
+    </section>
+
+    <section class="ops-panel priority-panel">
+      <div class="ops-panel-header">
+        <div>
+          <h2>High Priority Components</h2>
+          <p>Shortage items which need action before due date.</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="priority-table">
+          <thead>
+            <tr>
+              <th>BPCS No</th>
+              <th>Grade</th>
+              <th>Size</th>
+              <th>Pending Qty</th>
+              <th>Ready Qty</th>
+              <th>Shortage</th>
+              <th>Due Date</th>
+            </tr>
+          </thead>
+          <tbody id="priorityComponentsTable"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</section>
+
+      <section class="view" id="masters">
+        <div class="subnav" aria-label="Master sections">
+          <button class="subnav-item active" data-master-view="vendorMasterPage">
+            <i data-lucide="building-2"></i>
+            Vendor Master
+          </button>
+          <button class="subnav-item" data-master-view="productMasterPage">
+            <i data-lucide="boxes"></i>
+            Product Master
+          </button>
+          <button class="subnav-item" data-master-view="customerMasterPage">
+            <i data-lucide="users"></i>
+            Customer Master
+          </button>
+        </div>
+
+        <div class="master-page active" id="vendorMasterPage">
+          <form class="panel form-panel" id="vendorMasterForm">
+            <div class="panel-header">
+              <div>
+                <h2>Vendor Master</h2>
+                <p>Job work vendors ko maintain karein aur Product Master me map karein.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Vendor Name
+                <input name="vendorName" placeholder="SHEETALA ENTERPRISES" required />
+              </label>
+              <label>
+                City <span class="optional-label">Optional</span>
+                <input name="city" placeholder="Pune" />
+              </label>
+              <label>
+                Contact <span class="optional-label">Optional</span>
+                <input name="contact" placeholder="Name / mobile" />
+              </label>
+              <label style="grid-column: 1 / -1;">
+                Full Address <span class="optional-label">Optional</span>
+                <textarea name="fullAddress" placeholder="Shop No. / Plot No., Street, Area, City - PIN" rows="2" style="resize: vertical;"></textarea>
+              </label>
+            </div>
+
+            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px;">
+              <span style="font-size: 0.88rem; font-weight: 700; color: #41505f;">Documents</span>
+              <span class="optional-label">All Optional</span>
+              <span style="font-size: 0.75rem; color: var(--muted); margin-left: 2px;">PDF, JPG, PNG - max 10 MB</span>
+            </div>
+            <div class="doc-upload-grid">
+              <label class="upload-card" data-field="panCard">
+                <div class="upload-card-icon"><i data-lucide="credit-card"></i></div>
+                <div class="upload-card-body">
+                  <span class="upload-card-title">PAN Card</span>
+                  <span class="upload-card-status">Click to upload</span>
+                </div>
+                <span class="upload-card-opt">Optional</span>
+                <input type="file" name="panCard" accept=".pdf,.jpg,.jpeg,.png" />
+              </label>
+              <label class="upload-card" data-field="aadharCard">
+                <div class="upload-card-icon"><i data-lucide="id-card"></i></div>
+                <div class="upload-card-body">
+                  <span class="upload-card-title">Aadhar Card</span>
+                  <span class="upload-card-status">Click to upload</span>
+                </div>
+                <span class="upload-card-opt">Optional</span>
+                <input type="file" name="aadharCard" accept=".pdf,.jpg,.jpeg,.png" />
+              </label>
+              <label class="upload-card" data-field="cancelCheque">
+                <div class="upload-card-icon"><i data-lucide="landmark"></i></div>
+                <div class="upload-card-body">
+                  <span class="upload-card-title">Cancelled Cheque</span>
+                  <span class="upload-card-status">Click to upload</span>
+                </div>
+                <span class="upload-card-opt">Optional</span>
+                <input type="file" name="cancelCheque" accept=".pdf,.jpg,.jpeg,.png" />
+              </label>
+              <label class="upload-card" data-field="gstDoc">
+                <div class="upload-card-icon"><i data-lucide="file-check"></i></div>
+                <div class="upload-card-body">
+                  <span class="upload-card-title">GST Certificate</span>
+                  <span class="upload-card-status">Click to upload</span>
+                </div>
+                <span class="upload-card-opt">Optional</span>
+                <input type="file" name="gstDoc" accept=".pdf,.jpg,.jpeg,.png" />
+              </label>
+              <label class="upload-card" data-field="otherDoc">
+                <div class="upload-card-icon"><i data-lucide="paperclip"></i></div>
+                <div class="upload-card-body">
+                  <span class="upload-card-title">Other Document</span>
+                  <span class="upload-card-status">Click to upload</span>
+                </div>
+                <span class="upload-card-opt">Optional</span>
+                <input type="file" name="otherDoc" accept=".pdf,.jpg,.jpeg,.png" />
+              </label>
+            </div>
+
+            <button type="submit" class="primary-button">
+              <i data-lucide="plus"></i>
+              Add Vendor
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Vendors</h2>
+                <p>Approved job work supplier list.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>City</th>
+                    <th>Contact</th>
+                    <th>Documents</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="vendorMasterTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="master-page" id="productMasterPage">
+        <form class="panel form-panel" id="productMasterForm">
+          <div class="panel-header">
+            <div>
+              <h2>Product Master</h2>
+              <p>BPCS final product ko vendor aur exact raw material specification ke saath map karein.</p>
+            </div>
+          </div>
+          <div class="form-grid product-form-grid">
+            <label>
+              BPCS No
+              <input name="bpcsNo" placeholder="13000263" required />
+            </label>
+            <label>
+              1st Vendor Name
+              <select name="vendorName" id="productVendorSelect" required></select>
+            </label>
+            <label>
+              Shape
+              <input name="shape" placeholder="ROUND BAR" value="ROUND BAR" required />
+            </label>
+            <label>
+              Grade
+              <input name="grade" placeholder="20MNCR5" required />
+            </label>
+            <label>
+              Size (mm)
+              <input name="sizeMm" type="number" min="0.01" step="0.01" placeholder="63" required />
+            </label>
+            <label>
+              Input Weight (kg/pc)
+              <input name="inputWeightKg" type="number" min="0.001" step="0.001" placeholder="1.79" required />
+              <span class="field-hint">Without end-cut loss.</span>
+            </label>
+            <label>
+              Net Input Wt (kg/pc)
+              <input name="netInputWeightKg" type="number" min="0.001" step="0.001" placeholder="1.82" required />
+              <span class="field-hint">Including end-cut loss. Planning uses this.</span>
+            </label>
+          </div>
+          <button type="submit" class="primary-button">
+            <i data-lucide="plus"></i>
+            Add Product Master
+          </button>
+        </form>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>BPCS Product Relation</h2>
+              <p>Job work ke baad banne wala SKU aur uska raw material relation.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>BPCS No</th>
+                  <th>1st Vendor</th>
+                  <th>Shape</th>
+                  <th>Grade</th>
+                  <th>Size</th>
+                  <th>Input Wt</th>
+                  <th>Net Input Wt</th>
+                  <th>UOM</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="productMasterTable"></tbody>
+            </table>
+          </div>
+        </section>
+        </div>
+
+        <div class="master-page" id="customerMasterPage">
+          <form class="panel form-panel" id="customerMasterForm">
+            <div class="panel-header">
+              <div>
+                <h2>Customer Master</h2>
+                <p>End customers ko maintain karein; schedule me customer dropdown se select hoga.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Customer Name
+                <input name="customerName" placeholder="XYZ MOTORS" required />
+              </label>
+              <label>
+                City <span class="optional-label">Optional</span>
+                <input name="city" placeholder="Pune" />
+              </label>
+              <label>
+                Contact <span class="optional-label">Optional</span>
+                <input name="contact" placeholder="Name / mobile" />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="plus"></i>
+              Add Customer
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Customers</h2>
+                <p>Schedule aur dispatch planning ke customer records.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>City</th>
+                    <th>Contact</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="customerMasterTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+      </section>
+
+      <section class="view" id="grn">
+        <div class="subnav" aria-label="GRN sections">
+          <button class="subnav-item active" data-grn-view="bosGrnPage">
+            <i data-lucide="warehouse"></i>
+            BOS GRN
+          </button>
+          <button class="subnav-item" data-grn-view="jobWorkAssignmentPage">
+            <i data-lucide="send"></i>
+            Job Work Assignment
+          </button>
+        </div>
+
+        <div class="grn-page active" id="bosGrnPage">
+          <form class="panel form-panel" id="ourEndGrnForm">
+            <div class="panel-header">
+              <div>
+                <h2>BOS GRN / Raw Material Receipt</h2>
+                <p>Hamare end par raw material receive karein. Part No aur Vendor ke basis par Grade, Size, Shape auto-fill honge.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Supplier Invoice
+                <input name="supplierInvoice" placeholder="BOS-INV-1024" required />
+              </label>
+              <label>
+                GRN Date
+                <input name="grnDate" type="date" required />
+              </label>
+              <label>
+                Part No.
+                <select name="componentCode" id="bosPartSelect" required></select>
+              </label>
+              <label>
+                Vendor Name
+                <select name="vendorName" id="bosVendorName" required></select>
+              </label>
+              <label>
+                Grade
+                <input id="bosGrade" readonly required />
+              </label>
+              <label>
+                Size
+                <input id="bosSize" readonly required />
+              </label>
+              <label>
+                Shape
+                <input id="bosShape" readonly required />
+              </label>
+              <label>
+                Qty Received (MT)
+                <input name="qtyMt" type="number" min="0.001" step="0.001" required />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="send"></i>
+              Save BOS GRN
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>BOS GRN Records</h2>
+                <p>Raw material received at BOS, measured in MT. Job Work issue will happen separately.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Supplier Invoice</th>
+                    <th>BPCS</th>
+                    <th>Vendor</th>
+                    <th>Grade</th>
+                    <th>Size</th>
+                    <th>Shape</th>
+                    <th>Qty Received MT</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="ourEndGrnTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="grn-page" id="jobWorkAssignmentPage">
+          <form class="panel form-panel" id="issueForm">
+            <div class="panel-header">
+              <div>
+                <h2>Job Work Assignment / Raw Material Issue</h2>
+                <p>BOS se vendor ko raw material issue karein. Ye raw material later vendor GRN me confirm hoga.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <input name="bosGrnId" type="hidden" />
+              <label>
+                Component
+                <select name="componentCode" id="issueComponentSelect" required></select>
+              </label>
+              <label>
+                Vendor
+                <input name="vendor" placeholder="ABC Job Works" required />
+              </label>
+              <label>
+                Issue Date
+                <input name="issueDate" type="date" required />
+              </label>
+              <label>
+                Raw Issue (MT)
+                <input name="rawIssuedKg" type="number" min="0.001" step="0.001" required />
+                <span class="field-hint" id="issueRemainingHint"></span>
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="send"></i>
+              Assign Job Work
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Job Work Assignments</h2>
+                <p>Vendor ko issue kiya gaya raw material aur expected component output.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>BOS GRN Date</th>
+                    <th>Supplier Invoice</th>
+                    <th>Component</th>
+                    <th>Vendor</th>
+                    <th>GRN MT</th>
+                    <th>Assigned MT</th>
+                    <th>Balance MT</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="lotTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="vendor">
+        <div class="subnav" aria-label="Vendor sections">
+          <button class="subnav-item active" data-vendor-view="vendorGrnPage">
+            <i data-lucide="clipboard-check"></i>
+            Vendor GRN
+          </button>
+          <button class="subnav-item" data-vendor-view="vendorComponentReadyPage">
+            <i data-lucide="package-check"></i>
+            Components Ready
+          </button>
+        </div>
+
+        <div class="vendor-page active" id="vendorGrnPage">
+          <form class="panel form-panel" id="vendorEndGrnForm">
+            <div class="panel-header">
+              <div>
+                <h2>Vendor End GRN</h2>
+                <p>BOS ke Job Work material assignment ke against vendor raw material receipt confirm karega.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Product / Material Assignment
+                <select name="bosGrnId" id="vendorBosInvoiceSelect" required></select>
+              </label>
+              <label>
+                Vendor GRN Date
+                <input name="grnDate" type="date" required />
+              </label>
+              <label>
+                Part No.
+                <input id="vendorPartNo" readonly required />
+              </label>
+              <label>
+                Grade
+                <input id="vendorGrade" readonly required />
+              </label>
+              <label>
+                Size
+                <input id="vendorSize" readonly required />
+              </label>
+              <label>
+                Shape
+                <input id="vendorShape" readonly required />
+              </label>
+              <label>
+                Qty Received (MT)
+                <input name="receivedMt" type="number" min="0.001" step="0.001" required />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="clipboard-check"></i>
+              Save Vendor End GRN
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Pending - Awaiting Vendor GRN</h2>
+                <p>Job work assignments jinke liye vendor GRN confirmation abhi baki hai.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Issue Date</th>
+                    <th>Product</th>
+                    <th>Vendor</th>
+                    <th>Part No.</th>
+                    <th>Grade</th>
+                    <th>Size</th>
+                    <th>Shape</th>
+                    <th>Assigned MT</th>
+                    <th>Received MT</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="vendorEndGrnTable"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Vendor GRN History</h2>
+                <p>Confirmed raw material receipts at vendor end - complete audit trail.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>GRN Date</th>
+                    <th>Lot No.</th>
+                    <th>Part No.</th>
+                    <th>Vendor</th>
+                    <th>Grade</th>
+                    <th>Size</th>
+                    <th>Assigned MT</th>
+                    <th>Received MT</th>
+                    <th>Remarks</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="confirmedVendorGrnTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="vendor-page" id="vendorComponentReadyPage">
+          <form class="panel form-panel" id="receiptForm">
+            <div class="panel-header">
+              <div>
+                <h2>Components Ready Against Raw Issue</h2>
+                <p>Finished qty BOS-buyable stock me count hogi; semi finished sirf progress information ke liye rahega.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Job Work Assignment
+                <select name="lotNo" id="receiptLotSelect" required></select>
+              </label>
+              <label>
+                Ready Date
+                <input name="receiptDate" type="date" required />
+              </label>
+              <label>
+                Remaining Ready Pieces
+                <input name="expectedFinishedPieces" type="number" min="0" step="1" readonly />
+              </label>
+              <label>
+                Semi Finished Info (pcs)
+                <input name="semiFinishedPieces" type="number" min="0" step="1" />
+              </label>
+            <label>
+  Additional Finished Ready Qty (pcs)
+  <input name="finishedPieces" type="number" min="0" step="1" />
+</label>
+              <label>
+                End Cut Material (KG)
+                <input name="endCutKg" type="number" min="0" step="0.001" />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="package-check"></i>
+              Save Components Ready
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Components Ready Records</h2>
+                <p>Job work assignment ke against semi progress aur finished ready quantity.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Vendor GRN Date</th>
+                    <th>Assignment</th>
+                    <th>Vendor</th>
+                    <th>Part No.</th>
+                    <th>Received MT</th>
+                    <th>Semi Finished</th>
+                    <th>Finished Ready</th>
+                    <th>End Cut Material (KG)</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="componentsReadyTable"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="schedule">
+        <div class="form-stack">
+          <form class="panel form-panel" id="scheduleForm">
+            <div class="panel-header">
+              <div>
+                <h2>Customer Schedule</h2>
+                <p>End customer ke delivery plan ko component wise capture karein.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Customer
+                <select name="customer" id="scheduleCustomerSelect" required></select>
+              </label>
+              <label>
+                Component
+                <select name="componentCode" id="scheduleComponentSelect" required></select>
+              </label>
+              <label>
+                Due Date
+                <input name="dueDate" type="date" required />
+              </label>
+              <label>
+                Required Qty (pcs)
+                <input name="requiredQty" type="number" min="1" step="1" required />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="calendar-plus"></i>
+              Add Schedule
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Dispatch Readiness</h2>
+                <p>GRN/receipt based pcs stock vs customer requirement.</p>
+              </div>
+            </div>
+            <div id="readinessList" class="readiness-list"></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Schedules</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>End Product</th>
+                  <th>Raw Material</th>
+                  <th>Due Date</th>
+                  <th>Required</th>
+                  <th>Sold</th>
+                  <th>Sale Pending</th>
+                  <th>Semi Finished</th>
+                  <th>Available Ready</th>
+                  <th>Shortage</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="scheduleTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="sales">
+        <div class="form-stack">
+          <form class="panel form-panel" id="salesForm">
+            <div class="panel-header">
+              <div>
+                <h2>Customer Sales / Dispatch</h2>
+                <p>Components ready hone ke baad customer ko sold pieces aur invoice details capture karein.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Customer
+                <select name="customer" id="salesCustomerSelect" required></select>
+              </label>
+              <label>
+                Component
+                <select name="componentCode" id="salesComponentSelect" required></select>
+              </label>
+              <label>
+                Sale Date
+                <input name="saleDate" type="date" required />
+              </label>
+              <label>
+                Invoice No.
+                <input name="invoiceNo" placeholder="INV-1024" required />
+              </label>
+              <label>
+                Available Finished Qty
+                <input name="availableFinishedPieces" type="number" min="0" step="1" readonly />
+              </label>
+              <label>
+                Sold Qty (pcs)
+                <input name="soldQty" type="number" min="1" step="1" required />
+              </label>
+              <label>
+                Rate / Piece <span class="optional-label">Optional</span>
+                <input name="ratePerPiece" type="number" min="0" step="0.01" />
+              </label>
+              <label>
+                Remarks <span class="optional-label">Optional</span>
+                <input name="remarks" placeholder="Dispatch note / vehicle / LR details" />
+              </label>
+            </div>
+            <button type="submit" class="primary-button">
+              <i data-lucide="receipt-indian-rupee"></i>
+              Save Sale
+            </button>
+          </form>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Finished Stock Available for Sale</h2>
+                <p>Components Ready minus already sold customer quantity.</p>
+              </div>
+            </div>
+            <div id="salesStockList" class="readiness-list"></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Sales Records</h2>
+              <p>Customer-wise sale details after components ready.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Invoice</th>
+                  <th>Customer</th>
+                  <th>Component</th>
+                  <th>Sold Qty</th>
+                  <th>Rate</th>
+                  <th>Amount</th>
+                  <th>Remarks</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="salesTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="planning">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Automatic Purchase & Vendor Planning</h2>
+              <p>Customer schedule ke hisab se required finished pcs, raw MT aur vendor issue suggestion.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Priority</th>
+                  <th>End Product</th>
+                  <th>Raw Material</th>
+                  <th>Due Date</th>
+                  <th>Pending Demand</th>
+                  <th>Semi Finished</th>
+                  <th>Available Ready</th>
+                  <th>Open JW</th>
+                  <th>Dispatch Shortage</th>
+                  <th>Raw Gap Qty</th>
+                  <th>Raw Needed MT</th>
+                  <th>BOS Raw Available MT</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="planningTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="flowStatus">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Order / Product Flow Status</h2>
+              <p>GRN se job work, vendor GRN aur components ready tak complete row-wise status.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>BOS GRN</th>
+                  <th>Product</th>
+                  <th>Vendor</th>
+                  <th>GRN MT</th>
+                  <th>Lot No.</th>
+                  <th>Assigned MT</th>
+                  <th>Vendor Received MT</th>
+                  <th>Expected</th>
+                  <th>Semi</th>
+                  <th>Finished</th>
+                  <th>Sold</th>
+                  <th>Available</th>
+                  <th>Pending</th>
+                  <th>End Cut KG</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="flowStatusTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+    <div id="toastContainer" class="toast-container"></div>
+  </body>
+</html>
