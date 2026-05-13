@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
+const crypto = require("crypto");
 const pool = require("./db");
 
 const DOCUMENT_FIELDS = {
@@ -32,6 +33,68 @@ const uploadDocs = multer({
 
 const app = express();
 const publicDir = path.join(__dirname, "..");
+
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "change-this-dev-secret";
+const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
+
+function createSessionToken() {
+  const payload = Buffer.from(JSON.stringify({
+    exp: Date.now() + SESSION_HOURS * 60 * 60 * 1000,
+  })).toString("base64url");
+
+  const signature = crypto
+    .createHmac("sha256", AUTH_SECRET)
+    .update(payload)
+    .digest("base64url");
+
+  return `${payload}.${signature}`;
+}
+
+function verifySessionToken(token) {
+  if (!token || !token.includes(".")) return false;
+
+  const [payload, signature] = token.split(".");
+  const expectedSignature = crypto
+    .createHmac("sha256", AUTH_SECRET)
+    .update(payload)
+    .digest("base64url");
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    return false;
+  }
+
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return Number(data.exp || 0) > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function requireApiAuth(req, res, next) {
+  if (!req.path.startsWith("/api/")) return next();
+  if (req.path === "/api/login") return next();
+
+  if (!ADMIN_PASSWORD) {
+    return res.status(500).json({
+      success: false,
+      message: "ADMIN_PASSWORD is missing on server",
+    });
+  }
+
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+  if (!verifySessionToken(token)) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized. Please login again.",
+    });
+  }
+
+  next();
+}
 
 async function ensureSchema() {
   await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -225,6 +288,29 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: "2mb" }));
+
+app.post("/api/login", asyncHandler(async (req, res) => {
+  if (!ADMIN_PASSWORD) {
+    const error = new Error("ADMIN_PASSWORD is missing on server");
+    error.status = 500;
+    throw error;
+  }
+
+  const password = cleanText(req.body.password);
+
+  if (password !== ADMIN_PASSWORD) {
+    const error = new Error("Invalid password");
+    error.status = 401;
+    throw error;
+  }
+
+  res.json({
+    success: true,
+    token: createSessionToken(),
+  });
+}));
+
+app.use(requireApiAuth);
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -825,18 +911,41 @@ app.post("/api/vendor-productions", asyncHandler(async (req, res) => {
 }));
 
 app.post("/api/schedules", asyncHandler(async (req, res) => {
+  const customer = upperText(requiredText(req.body.customer, "Customer"));
+  const componentCode = upperText(requiredText(req.body.componentCode, "Component code"));
+  const dueDate = requiredText(req.body.dueDate, "Due date");
+  const requiredQty = toNumber(req.body.requiredQty, "Required qty", 1);
+
+  const customerExists = await pool.query(
+    "SELECT 1 FROM customers WHERE customer_name = $1 AND is_active = true LIMIT 1",
+    [customer],
+  );
+
+  if (!customerExists.rowCount) {
+    const error = new Error("Customer not found in Customer Master");
+    error.status = 400;
+    throw error;
+  }
+
+  const productExists = await pool.query(
+    "SELECT 1 FROM product_masters WHERE bpcs_no = $1 AND is_active = true LIMIT 1",
+    [componentCode],
+  );
+
+  if (!productExists.rowCount) {
+    const error = new Error("Product not found in Product Master");
+    error.status = 400;
+    throw error;
+  }
+
   await pool.query(
     `
     INSERT INTO customer_schedules (customer, component_code, due_date, required_qty)
     VALUES ($1, $2, $3, $4)
     `,
-    [
-      upperText(requiredText(req.body.customer, "Customer")),
-      upperText(requiredText(req.body.componentCode, "Component code")),
-      requiredText(req.body.dueDate, "Due date"),
-      toNumber(req.body.requiredQty, "Required qty", 1),
-    ],
+    [customer, componentCode, dueDate, requiredQty],
   );
+
   res.json({ success: true });
 }));
 
@@ -1126,11 +1235,25 @@ app.delete("/api/sales/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.use(express.static(publicDir));
+app.get("/", (req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
+});
+
+app.get("/index.html", (req, res) => {
+  res.sendFile(path.join(publicDir, "index.html"));
+});
+
+app.get("/app.js", (req, res) => {
+  res.type("application/javascript").sendFile(path.join(publicDir, "app.js"));
+});
+
+app.get("/styles.css", (req, res) => {
+  res.type("text/css").sendFile(path.join(publicDir, "styles.css"));
+});
 
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/")) return next();
-  return res.sendFile(path.join(publicDir, "index.html"));
+  return res.status(404).send("Not found");
 });
 
 const PORT = process.env.PORT || 5000;

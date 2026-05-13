@@ -9,6 +9,41 @@ const API_BASE = ["localhost", "127.0.0.1"].includes(window.location.hostname) &
   ? "http://localhost:5000/api"
   : "/api";
 const API_ORIGIN = API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : "";
+const API_TOKEN_KEY = "jobWorkApiToken";
+
+function getApiToken() {
+  return sessionStorage.getItem(API_TOKEN_KEY) || "";
+}
+
+function clearApiToken() {
+  sessionStorage.removeItem(API_TOKEN_KEY);
+}
+
+async function ensureApiToken() {
+  const existingToken = getApiToken();
+  if (existingToken) return existingToken;
+
+  const password = window.prompt("Admin password enter karein");
+  if (!password) {
+    throw new Error("Login required");
+  }
+
+  const response = await fetch(`${API_BASE}/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data.token) {
+    throw new Error(data.message || "Login failed");
+  }
+
+  sessionStorage.setItem(API_TOKEN_KEY, data.token);
+  return data.token;
+}
+
 // ── Toast ──────────────────────────────────────────────────────────────
 function showToast(message, type = "success") {
   const container = document.getElementById("toastContainer");
@@ -118,13 +153,7 @@ const elements = {
 
 async function loadStateFromApi() {
   try {
-    const response = await fetch(`${API_BASE}/state`);
-
-    if (!response.ok) {
-      throw new Error("State load failed");
-    }
-
-    const data = await response.json();
+    const data = await apiRequest("/state");
 
     state = normalizeState(data);
     renderAll();
@@ -133,7 +162,7 @@ async function loadStateFromApi() {
     if (el) el.textContent = "Loaded from PostgreSQL";
   } catch (error) {
     console.error(error);
-    showToast("Database load failed. PostgreSQL connection check karein.", "error");
+    showToast(error.message || "Database load failed. PostgreSQL connection check karein.", "error");
 
     state = normalizeState({});
     renderAll();
@@ -1800,22 +1829,31 @@ function startSaleFromComponent(componentCode) {
 }
 
 async function apiRequest(path, options = {}) {
+  const token = await ensureApiToken();
+
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
       ...(options.headers || {}),
     },
   });
+
   let result = null;
   try {
     result = await response.json();
   } catch {
     result = {};
   }
-  if (!response.ok || result.success === false) {
-    throw new Error(result.message || `Request failed: ${response.status}`);
-  }
+if (response.status === 401) {
+  clearApiToken();
+  throw new Error("Session expired. Page refresh karke login karein.");
+}
+
+if (!response.ok || result.success === false) {
+  throw new Error(result.message || `Request failed: ${response.status}`);
+}
   return result;
 }
 
