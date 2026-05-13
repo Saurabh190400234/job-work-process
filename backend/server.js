@@ -31,6 +31,7 @@ const uploadDocs = multer({
 ]);
 
 const app = express();
+const publicDir = path.join(__dirname, "..");
 
 async function ensureSchema() {
   await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto");
@@ -214,7 +215,8 @@ app.use(cors({
     try {
       const url = new URL(origin);
       const isLocal = ["localhost", "127.0.0.1"].includes(url.hostname);
-      return callback(isLocal ? null : new Error(`CORS blocked for origin: ${origin}`), isLocal);
+      const isRender = url.hostname.endsWith(".onrender.com");
+      return callback(isLocal || isRender ? null : new Error(`CORS blocked for origin: ${origin}`), isLocal || isRender);
     } catch {
       return callback(new Error(`CORS blocked for origin: ${origin}`));
     }
@@ -297,10 +299,6 @@ async function upsertRawMaterial(client, product) {
     [rawCode, `${product.shape} ${product.grade} ${product.sizeMm}mm`, product.shape, product.grade, product.sizeMm],
   );
 }
-
-app.get("/", (req, res) => {
-  res.send("Job Work Backend is running");
-});
 
 app.get("/api/test-db", asyncHandler(async (req, res) => {
   const result = await pool.query("SELECT NOW() AS current_time");
@@ -1127,6 +1125,13 @@ app.delete("/api/sales/:id", asyncHandler(async (req, res) => {
   await pool.query("DELETE FROM customer_sales WHERE id = $1", [req.params.id]);
   res.json({ success: true });
 }));
+
+app.use(express.static(publicDir));
+
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) return next();
+  return res.sendFile(path.join(publicDir, "index.html"));
+});
 
 const PORT = process.env.PORT || 5000;
 

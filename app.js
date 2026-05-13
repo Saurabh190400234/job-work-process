@@ -5,7 +5,10 @@ const today = new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 }).format(new Date());
-const API_BASE = "http://localhost:5000/api";
+const API_BASE = ["localhost", "127.0.0.1"].includes(window.location.hostname) && window.location.port === "8080"
+  ? "http://localhost:5000/api"
+  : "/api";
+const API_ORIGIN = API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : "";
 // ── Toast ──────────────────────────────────────────────────────────────
 function showToast(message, type = "success") {
   const container = document.getElementById("toastContainer");
@@ -1162,7 +1165,7 @@ function renderMasters() {
         ];
         const docBadges = docs
           .filter((d) => d.url)
-          .map((d) => `<a href="http://localhost:5000${d.url}" target="_blank" rel="noopener" class="doc-badge" title="View ${d.label}">${h(d.label)}</a>`)
+          .map((d) => `<a href="${h(`${API_ORIGIN}${d.url}`)}" target="_blank" rel="noopener" class="doc-badge" title="View ${d.label}">${h(d.label)}</a>`)
           .join("");
         return `
         <tr>
