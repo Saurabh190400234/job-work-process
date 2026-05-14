@@ -10,7 +10,7 @@ const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
 const pool = require("./db");
 
-const DOCUMENT_FIELDS = {-
+const DOCUMENT_FIELDS = {
   panCard: "pan_card_url",
   aadharCard: "aadhar_card_url",
   cancelCheque: "cancel_cheque_url",
