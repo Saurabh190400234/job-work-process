@@ -1,13 +1,16 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
-const path = require("path");
 const crypto = require("crypto");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const cookieParser = require("cookie-parser");
 const pool = require("./db");
 
-const DOCUMENT_FIELDS = {
+const DOCUMENT_FIELDS = {-
   panCard: "pan_card_url",
   aadharCard: "aadhar_card_url",
   cancelCheque: "cancel_cheque_url",
@@ -17,11 +20,18 @@ const DOCUMENT_FIELDS = {
 
 const uploadDocs = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 5,
+  },
   fileFilter(req, file, cb) {
-    const allowed = [".pdf", ".jpg", ".jpeg", ".png"];
+    const allowedExt = [".pdf", ".jpg", ".jpeg", ".png"];
+    const allowedMime = ["application/pdf", "image/jpeg", "image/png"];
+
     const ext = path.extname(file.originalname).toLowerCase();
-    cb(allowed.includes(ext) ? null : new Error("Only PDF/JPG/PNG files allowed"), allowed.includes(ext));
+    const isAllowed = allowedExt.includes(ext) && allowedMime.includes(file.mimetype);
+
+    cb(isAllowed ? null : new Error("Only valid PDF/JPG/PNG files allowed"), isAllowed);
   },
 }).fields([
   { name: "panCard", maxCount: 1 },
@@ -35,8 +45,16 @@ const app = express();
 const publicDir = path.join(__dirname, "..");
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "change-this-dev-secret";
+const AUTH_SECRET = process.env.AUTH_SECRET;
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
+
+if (!ADMIN_PASSWORD) {
+  throw new Error("ADMIN_PASSWORD is required");
+}
+
+if (!AUTH_SECRET || AUTH_SECRET.length < 32) {
+  throw new Error("AUTH_SECRET is required and must be at least 32 characters");
+}
 
 function createSessionToken() {
   const payload = Buffer.from(JSON.stringify({
@@ -55,12 +73,21 @@ function verifySessionToken(token) {
   if (!token || !token.includes(".")) return false;
 
   const [payload, signature] = token.split(".");
+  if (!payload || !signature) return false;
+
   const expectedSignature = crypto
     .createHmac("sha256", AUTH_SECRET)
     .update(payload)
     .digest("base64url");
 
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  if (!crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
     return false;
   }
 
@@ -76,15 +103,10 @@ function requireApiAuth(req, res, next) {
   if (!req.path.startsWith("/api/")) return next();
   if (req.path === "/api/login") return next();
 
-  if (!ADMIN_PASSWORD) {
-    return res.status(500).json({
-      success: false,
-      message: "ADMIN_PASSWORD is missing on server",
-    });
-  }
-
   const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const cookieToken = req.cookies?.jobwork_session || "";
+  const token = cookieToken || bearerToken;
 
   if (!verifySessionToken(token)) {
     return res.status(401).json({
@@ -272,24 +294,53 @@ async function ensureSchema() {
   `);
 }
 
+app.set("trust proxy", 1);
+
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: false,
+}));
+
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:8080,http://localhost:5000")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
   origin(origin, callback) {
     if (!origin) return callback(null, true);
-    try {
-      const url = new URL(origin);
-      const isLocal = ["localhost", "127.0.0.1"].includes(url.hostname);
-      const isRender = url.hostname.endsWith(".onrender.com");
-      return callback(isLocal || isRender ? null : new Error(`CORS blocked for origin: ${origin}`), isLocal || isRender);
-    } catch {
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
-    }
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
 }));
 
-app.use(express.json({ limit: "2mb" }));
+app.use(cookieParser());
+app.use(express.json({ limit: "1mb" }));
 
-app.post("/api/login", asyncHandler(async (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many login attempts. Please try again later.",
+  },
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests. Please try again later.",
+  },
+});
+
+app.post("/api/login", loginLimiter, asyncHandler(async (req, res) => {
   if (!ADMIN_PASSWORD) {
     const error = new Error("ADMIN_PASSWORD is missing on server");
     error.status = 500;
@@ -304,13 +355,33 @@ app.post("/api/login", asyncHandler(async (req, res) => {
     throw error;
   }
 
+  const token = createSessionToken();
+
+  res.cookie("jobwork_session", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: SESSION_HOURS * 60 * 60 * 1000,
+  });
+
   res.json({
     success: true,
-    token: createSessionToken(),
+    token,
   });
 }));
 
+app.post("/api/logout", (req, res) => {
+  res.clearCookie("jobwork_session", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  });
+
+  res.json({ success: true });
+});
+
 app.use(requireApiAuth);
+app.use("/api", apiLimiter);
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -346,9 +417,13 @@ function asyncHandler(handler) {
       await handler(req, res);
     } catch (error) {
       console.error(error);
-      res.status(error.status || 500).json({
+
+      const status = error.status || 500;
+      const isClientError = status >= 400 && status < 500;
+
+      res.status(status).json({
         success: false,
-        message: error.message || "Request failed",
+        message: isClientError ? error.message : "Internal server error",
       });
     }
   };
@@ -515,42 +590,50 @@ app.post("/api/vendors", asyncHandler(async (req, res) => {
   res.json({ success: true, vendor: result.rows[0] });
 }));
 
-app.post("/api/vendors/:id/documents", (req, res, next) => {
-  uploadDocs(req, res, async (err) => {
-    if (err) return next(err);
-    try {
-      const updates = {};
-      for (const [fieldName, columnName] of Object.entries(DOCUMENT_FIELDS)) {
-        const file = req.files?.[fieldName]?.[0];
-        if (!file) continue;
-
-        await pool.query(
-          `
-          INSERT INTO vendor_documents (vendor_id, field_name, file_name, mime_type, data, updated_at)
-          VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-          ON CONFLICT (vendor_id, field_name)
-          DO UPDATE SET
-            file_name = EXCLUDED.file_name,
-            mime_type = EXCLUDED.mime_type,
-            data = EXCLUDED.data,
-            updated_at = CURRENT_TIMESTAMP
-          `,
-          [req.params.id, fieldName, file.originalname, file.mimetype, file.buffer],
-        );
-        updates[columnName] = `/api/vendors/${req.params.id}/documents/${fieldName}`;
-      }
-
-      if (Object.keys(updates).length === 0) return res.json({ success: true });
-
-      const setClauses = Object.keys(updates).map((col, i) => `${col} = $${i + 2}`).join(", ");
-      const values = [req.params.id, ...Object.values(updates)];
-      await pool.query(`UPDATE vendors SET ${setClauses} WHERE id = $1`, values);
-      res.json({ success: true });
-    } catch (dbErr) {
-      next(dbErr);
-    }
+app.post("/api/vendors/:id/documents", asyncHandler(async (req, res) => {
+  await new Promise((resolve, reject) => {
+    uploadDocs(req, res, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
   });
-});
+
+  const updates = {};
+
+  for (const [fieldName, columnName] of Object.entries(DOCUMENT_FIELDS)) {
+    const file = req.files?.[fieldName]?.[0];
+    if (!file) continue;
+
+    const safeOriginalName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+
+    await pool.query(
+      `
+      INSERT INTO vendor_documents (vendor_id, field_name, file_name, mime_type, data, updated_at)
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+      ON CONFLICT (vendor_id, field_name)
+      DO UPDATE SET
+        file_name = EXCLUDED.file_name,
+        mime_type = EXCLUDED.mime_type,
+        data = EXCLUDED.data,
+        updated_at = CURRENT_TIMESTAMP
+      `,
+      [req.params.id, fieldName, safeOriginalName, file.mimetype, file.buffer],
+    );
+
+    updates[columnName] = `/api/vendors/${req.params.id}/documents/${fieldName}`;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return res.json({ success: true });
+  }
+
+  const setClauses = Object.keys(updates).map((col, i) => `${col} = $${i + 2}`).join(", ");
+  const values = [req.params.id, ...Object.values(updates)];
+
+  await pool.query(`UPDATE vendors SET ${setClauses} WHERE id = $1`, values);
+
+  res.json({ success: true });
+}));
 
 app.get("/api/vendors/:id/documents/:fieldName", asyncHandler(async (req, res) => {
   if (!DOCUMENT_FIELDS[req.params.fieldName]) {
@@ -573,11 +656,12 @@ app.get("/api/vendors/:id/documents/:fieldName", asyncHandler(async (req, res) =
     throw error;
   }
 
-  const doc = result.rows[0];
-  const safeName = cleanText(doc.fileName).replace(/["\r\n]/g, "") || "document";
-  res.setHeader("Content-Type", doc.mimeType || "application/octet-stream");
-  res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
-  res.send(doc.data);
+const doc = result.rows[0];
+const safeName = cleanText(doc.fileName).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "document";
+res.setHeader("Content-Type", doc.mimeType || "application/octet-stream");
+res.setHeader("X-Content-Type-Options", "nosniff");
+res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+res.send(doc.data);
 }));
 
 app.post("/api/customers", asyncHandler(async (req, res) => {

@@ -28,11 +28,12 @@ async function ensureApiToken() {
     throw new Error("Login required");
   }
 
-  const response = await fetch(`${API_BASE}/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
+const response = await fetch(`${API_BASE}/login`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  credentials: "include",
+  body: JSON.stringify({ password }),
+});
 
   const data = await response.json().catch(() => ({}));
 
@@ -437,8 +438,18 @@ function productionQty(componentCode, stage) {
     .reduce((sum, lot) => sum + Number(lot.producedQty || 0), 0);
 }
 
-function getProductMaster(code) {
-  return state.productMasters.find((product) => product.bpcsNo === code);
+function getProductMaster(code, vendorName = "") {
+  const targetCode = String(code || "").trim().toUpperCase();
+  const targetVendor = String(vendorName || "").trim().toUpperCase();
+
+  if (targetVendor) {
+    const exactProduct = state.productMasters.find((product) =>
+      product.bpcsNo === targetCode && product.vendorName === targetVendor
+    );
+    if (exactProduct) return exactProduct;
+  }
+
+  return state.productMasters.find((product) => product.bpcsNo === targetCode);
 }
 
 function getProductById(id) {
@@ -449,8 +460,8 @@ function productOptionLabel(product) {
   return `${product.bpcsNo} | ${product.vendorName} | ${product.grade} ${compactNumber(product.sizeMm)}mm ${product.shape}`;
 }
 
-function getWorkItem(code) {
-  const product = getProductMaster(code);
+function getWorkItem(code, vendorName = "") {
+  const product = getProductMaster(code, vendorName);
   if (product) return productToWorkItem(product);
   return getComponent(code);
 }
@@ -478,7 +489,7 @@ function rawMaterialLabel(component) {
 }
 
 function expectedPieces(lot) {
-  const component = getWorkItem(lot.componentCode);
+  const component = getWorkItem(lot.componentCode, lot.vendor);
   if (!component) return 0;
   return Math.floor(Number(lot.rawIssuedKg) / Number(component.rawPerPieceKg));
 }
@@ -1248,7 +1259,7 @@ function renderLots() {
   document.querySelector("#lotTable").innerHTML = pendingGrns.length === 0
     ? emptyState("No BOS GRN rows available for assignment")
     : pendingGrns.map((grn) => {
-        const product = getProductById(grn.productId) || getProductMaster(grn.componentCode);
+        const product = getProductById(grn.productId) || getProductMaster(grn.componentCode, grn.vendorName);
         const receivedKg = mtToKg(grn.qtyMt);
         const assignedKg = rawAssignedByBosGrn(grn);
         const balanceKg = Math.max(receivedKg - assignedKg, 0);
@@ -1440,7 +1451,7 @@ function renderGrns() {
     ? emptyState("No pending vendor GRN - all assignments confirmed")
     : pendingVendorLots.map((lot) => {
         const componentCode = lot.componentCode;
-        const product = getProductMaster(componentCode);
+        const product = getProductMaster(componentCode, lot.vendor);
         const workItem = getWorkItem(componentCode);
         const receivedMt = vendorGrnReceivedByLot(lot.lotNo);
         const balanceMt = Math.max(kgToMt(lot.rawIssuedKg) - receivedMt, 0);
@@ -1470,7 +1481,7 @@ function renderGrns() {
     ? emptyState("No confirmed vendor GRN records yet")
     : sortedVendorGrns.map((grn) => {
         const lot = state.lots.find((l) => l.lotNo === grn.lotNo);
-        const product = lot ? getProductMaster(lot.componentCode) : null;
+        const product = lot ? getProductMaster(lot.componentCode, lot.vendor) : null;
         return `
           <tr>
             <td>${h(formatIstDateTime(grn.grnDate))}</td>
@@ -1831,14 +1842,15 @@ function startSaleFromComponent(componentCode) {
 async function apiRequest(path, options = {}) {
   const token = await ensureApiToken();
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(options.headers || {}),
-    },
-  });
+const response = await fetch(`${API_BASE}${path}`, {
+  ...options,
+  credentials: "include",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+    ...(options.headers || {}),
+  },
+});
 
   let result = null;
   try {
@@ -1973,7 +1985,15 @@ elements.vendorMasterForm.addEventListener("submit", async (event) => {
         const input = form.elements[name];
         if (input?.files?.length > 0) fd.append(name, input.files[0]);
       });
-      const docRes = await fetch(`${API_BASE}/vendors/${targetId}/documents`, { method: "POST", body: fd });
+      const token = await ensureApiToken();
+const docRes = await fetch(`${API_BASE}/vendors/${targetId}/documents`, {
+  method: "POST",
+  credentials: "include",
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  body: fd,
+});
       const docJson = await docRes.json().catch(() => ({}));
       if (!docRes.ok || docJson.success === false) throw new Error(docJson.message || "Document upload failed");
     }

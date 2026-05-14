@@ -5,3 +5,5 @@ backend/.env
 backend/uploads/
 *.log
 .claude/
+.env.local
+uploads/
