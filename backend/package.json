@@ -8,6 +8,9 @@
     "start": "node server.js",
     "smoke": "node smoke-test.js"
   },
+  "engines": {
+    "node": ">=20 <25"
+  },
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

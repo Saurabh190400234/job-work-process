@@ -5,10 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Job Work Process Control</title>
     <link rel="stylesheet" href="styles.css" />
-    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js" defer></script>
-    <script src="app.js?v=20260512-sales-module" defer></script>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js" integrity="sha384-LtmWBcrD5iuFIR4sFphS8IiiaftkypL5dJzLKywbyd9ATLB7ZbPz3JYnI9nvXHkV" crossorigin="anonymous" defer></script>
+    <script src="app.js?v=20260515-sales-row-action" defer></script>
   </head>
-  <body>
+  <body class="auth-loading">
+    <section class="login-view" id="loginView" aria-label="Login">
+      <form class="login-card" id="loginForm">
+        <div class="brand login-brand">
+          <div class="brand-mark">JW</div>
+          <div>
+            <strong>Job Work Control</strong>
+            <span>Secure system login</span>
+          </div>
+        </div>
+        <div>
+          <p class="eyebrow">Security</p>
+          <h1>Login</h1>
+          <p>Apna login ID aur password enter karein.</p>
+        </div>
+        <label>
+          Login ID
+          <input name="username" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <div class="login-error" id="loginError"></div>
+        <button class="primary-button login-button" type="submit">
+          <i data-lucide="log-in"></i>
+          Login
+        </button>
+      </form>
+    </section>
+
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">JW</div>
@@ -22,6 +52,10 @@
         <button class="nav-item active" data-view="dashboard">
           <i data-lucide="layout-dashboard"></i>
           Dashboard
+        </button>
+        <button class="nav-item" data-view="customerDashboard">
+          <i data-lucide="bar-chart-3"></i>
+          Customer Dashboard
         </button>
         <button class="nav-item" data-view="masters">
           <i data-lucide="database"></i>
@@ -51,10 +85,26 @@
           <i data-lucide="git-branch"></i>
           Flow Status
         </button>
+        <button class="nav-item" data-view="access">
+          <i data-lucide="shield-check"></i>
+          Access Control
+        </button>
       </nav>
     </aside>
 
     <main class="main">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">Logged In</p>
+          <h2 id="currentUserName">User</h2>
+        </div>
+        <div class="topbar-actions">
+          <button class="danger-button" id="logoutButton" type="button">
+            <i data-lucide="log-out"></i>
+            Logout
+          </button>
+        </div>
+      </div>
 
       <section class="view active" id="dashboard">
   <div class="dashboard-hero">
@@ -150,6 +200,96 @@
     </section>
   </div>
 </section>
+
+      <section class="view" id="customerDashboard">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Customer Material Dashboard</h2>
+              <p>Schedule decision ke liye ready stock, possible output aur shortage summary.</p>
+            </div>
+          </div>
+          <div class="customer-summary-grid" id="customerSummaryGrid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Immediate Attention</h2>
+              <p>Jin products me schedule pending hai, unka ready coverage aur action priority.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Pending</th>
+                  <th>Ready Now</th>
+                  <th>Total Possible</th>
+                  <th>Gap</th>
+                  <th>Suggested Action</th>
+                </tr>
+              </thead>
+              <tbody id="customerPriorityTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Product-wise Availability</h2>
+              <p>Ready pieces, possible output, pending schedule aur decision status.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>BOS Raw MT</th>
+                  <th>Vendor Raw MT</th>
+                  <th>Possible From BOS</th>
+                  <th>Possible At Vendor</th>
+                  <th>Semi Finished</th>
+                  <th>Ready Pieces</th>
+                  <th>Your Pending Schedule</th>
+                  <th>Gap</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody id="customerMaterialTable"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Sales History</h2>
+              <p>BOS ne ab tak aapko product-wise kitne components sale/dispatch kiye hain.</p>
+            </div>
+          </div>
+          <div class="customer-sales-summary" id="customerSalesSummary"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Invoice</th>
+                  <th>Product</th>
+                  <th>Sold Qty</th>
+                  <th>Rate</th>
+                  <th>Amount</th>
+                  <th>Remarks</th>
+                </tr>
+              </thead>
+              <tbody id="customerSalesHistoryTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
 
       <section class="view" id="masters">
         <div class="subnav" aria-label="Master sections">
@@ -860,10 +1000,24 @@
             <div class="panel-header">
               <div>
                 <h2>Finished Stock Available for Sale</h2>
-                <p>Components Ready minus already sold customer quantity.</p>
+                <p>Available material select karke sirf remaining sale details fill karein.</p>
               </div>
             </div>
-            <div id="salesStockList" class="readiness-list"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Component</th>
+                    <th>Produced</th>
+                    <th>Sold</th>
+                    <th>Available</th>
+                    <th>Pending Schedule</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="salesStockList"></tbody>
+              </table>
+            </div>
           </section>
         </div>
 
@@ -958,6 +1112,80 @@
                 </tr>
               </thead>
               <tbody id="flowStatusTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+      <section class="view" id="access">
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>User Access Control</h2>
+              <p>Create login IDs, reset passwords and allow page-wise access.</p>
+            </div>
+          </div>
+          <form id="accessUserForm">
+            <input type="hidden" name="userId" />
+            <div class="form-grid">
+              <label>
+                Login ID
+                <input name="username" required autocomplete="off" />
+              </label>
+              <label>
+                Full Name
+                <input name="fullName" autocomplete="off" />
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="new-password" placeholder="Required for new user" />
+              </label>
+              <label>
+                Linked Customer <span class="optional-label">For customer logins</span>
+                <select name="customerName" id="accessCustomerSelect"></select>
+              </label>
+              <label class="checkbox-row">
+                <input name="isAdmin" type="checkbox" />
+                Admin user
+              </label>
+              <label class="checkbox-row">
+                <input name="isActive" type="checkbox" checked />
+                Active login
+              </label>
+            </div>
+            <div class="permission-grid" id="accessPermissions"></div>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">
+                <i data-lucide="save"></i>
+                Save User
+              </button>
+              <button class="danger-button" id="cancelUserEdit" type="button">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Users</h2>
+              <p>Only active users can login to this system.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Login ID</th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Customer</th>
+                  <th>Pages</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="accessUserTable"></tbody>
             </table>
           </div>
         </section>

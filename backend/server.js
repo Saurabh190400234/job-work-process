@@ -41,12 +41,96 @@ const uploadDocs = multer({
   { name: "otherDoc", maxCount: 1 },
 ]);
 
+function rejectBadUpload(message) {
+  const error = new Error(message);
+  error.status = 400;
+  throw error;
+}
+
+function validateDocumentFile(file) {
+  const ext = path.extname(file.originalname || "").toLowerCase();
+  const buffer = file.buffer || Buffer.alloc(0);
+
+  const isPdf = file.mimetype === "application/pdf"
+    && ext === ".pdf"
+    && buffer.length >= 4
+    && buffer.subarray(0, 4).toString("ascii") === "%PDF";
+
+  const isJpeg = file.mimetype === "image/jpeg"
+    && [".jpg", ".jpeg"].includes(ext)
+    && buffer.length >= 3
+    && buffer[0] === 0xff
+    && buffer[1] === 0xd8
+    && buffer[2] === 0xff;
+
+  const isPng = file.mimetype === "image/png"
+    && ext === ".png"
+    && buffer.length >= 8
+    && buffer[0] === 0x89
+    && buffer[1] === 0x50
+    && buffer[2] === 0x4e
+    && buffer[3] === 0x47
+    && buffer[4] === 0x0d
+    && buffer[5] === 0x0a
+    && buffer[6] === 0x1a
+    && buffer[7] === 0x0a;
+
+  if (!isPdf && !isJpeg && !isPng) {
+    rejectBadUpload("Only valid PDF/JPG/PNG files allowed");
+  }
+}
+
 const app = express();
 const publicDir = path.join(__dirname, "..");
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const AUTH_SECRET = process.env.AUTH_SECRET;
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
+const COOKIE_SAME_SITE = process.env.COOKIE_SAME_SITE || "strict";
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const SKIP_SCHEMA_CHECK = process.env.SKIP_SCHEMA_CHECK === "true";
+const MIN_PASSWORD_LENGTH = 12;
+
+function sessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: IS_PRODUCTION,
+    sameSite: COOKIE_SAME_SITE,
+    maxAge: SESSION_HOURS * 60 * 60 * 1000,
+  };
+}
+
+function clearSessionCookieOptions() {
+  const { maxAge, ...options } = sessionCookieOptions();
+  return options;
+}
+
+function csrfCookieOptions() {
+  return {
+    httpOnly: false,
+    secure: IS_PRODUCTION,
+    sameSite: COOKIE_SAME_SITE,
+    maxAge: SESSION_HOURS * 60 * 60 * 1000,
+  };
+}
+
+function createCsrfToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+const PAGE_DEFINITIONS = [
+  { key: "dashboard", label: "Dashboard" },
+  { key: "customerDashboard", label: "Customer Dashboard" },
+  { key: "masters", label: "Masters" },
+  { key: "grn", label: "GRN" },
+  { key: "vendor", label: "Vendor" },
+  { key: "schedule", label: "Customer Schedule" },
+  { key: "sales", label: "Sales" },
+  { key: "planning", label: "Purchase Plan" },
+  { key: "flowStatus", label: "Flow Status" },
+];
+const PAGE_KEYS = PAGE_DEFINITIONS.map((page) => page.key);
 
 if (!ADMIN_PASSWORD) {
   throw new Error("ADMIN_PASSWORD is required");
@@ -56,8 +140,43 @@ if (!AUTH_SECRET || AUTH_SECRET.length < 32) {
   throw new Error("AUTH_SECRET is required and must be at least 32 characters");
 }
 
-function createSessionToken() {
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [method, salt, hash] = String(storedHash || "").split("$");
+  if (method !== "scrypt" || !salt || !hash) return false;
+
+  const expected = Buffer.from(hash, "hex");
+  const actual = crypto.scryptSync(String(password), salt, 64);
+
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+}
+
+function normalizePermissions(permissions = []) {
+  const selected = Array.isArray(permissions) ? permissions : [];
+  return [...new Set(selected.filter((permission) => PAGE_KEYS.includes(permission)))];
+}
+
+function serializeUser(user) {
+  const permissions = user.is_admin ? PAGE_KEYS : normalizePermissions(user.page_permissions);
+  return {
+    id: user.id,
+    username: user.username,
+    fullName: user.full_name || "",
+    isAdmin: Boolean(user.is_admin),
+    customerName: user.customer_name || "",
+    permissions,
+  };
+}
+
+function createSessionToken(user) {
   const payload = Buffer.from(JSON.stringify({
+    userId: user.id,
     exp: Date.now() + SESSION_HOURS * 60 * 60 * 1000,
   })).toString("base64url");
 
@@ -70,10 +189,10 @@ function createSessionToken() {
 }
 
 function verifySessionToken(token) {
-  if (!token || !token.includes(".")) return false;
+  if (!token || !token.includes(".")) return null;
 
   const [payload, signature] = token.split(".");
-  if (!payload || !signature) return false;
+  if (!payload || !signature) return null;
 
   const expectedSignature = crypto
     .createHmac("sha256", AUTH_SECRET)
@@ -84,22 +203,23 @@ function verifySessionToken(token) {
   const expectedBuffer = Buffer.from(expectedSignature);
 
   if (signatureBuffer.length !== expectedBuffer.length) {
-    return false;
+    return null;
   }
 
   if (!crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
-    return false;
+    return null;
   }
 
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return Number(data.exp || 0) > Date.now();
+    if (Number(data.exp || 0) <= Date.now() || !data.userId) return null;
+    return data;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function requireApiAuth(req, res, next) {
+async function requireApiAuth(req, res, next) {
   if (!req.path.startsWith("/api/")) return next();
   if (req.path === "/api/login") return next();
 
@@ -107,11 +227,76 @@ function requireApiAuth(req, res, next) {
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const cookieToken = req.cookies?.jobwork_session || "";
   const token = cookieToken || bearerToken;
+  const session = verifySessionToken(token);
 
-  if (!verifySessionToken(token)) {
+  if (!session) {
     return res.status(401).json({
       success: false,
       message: "Unauthorized. Please login again.",
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT id, username, full_name, is_admin, customer_name, page_permissions FROM app_users WHERE id = $1 AND is_active = true",
+      [session.userId],
+    );
+
+    if (!result.rowCount) {
+      return res.status(401).json({
+        success: false,
+        message: "User inactive or not found. Please login again.",
+      });
+    }
+
+    req.user = serializeUser(result.rows[0]);
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user?.isAdmin) return next();
+  return res.status(403).json({
+    success: false,
+    message: "Admin access required.",
+  });
+}
+
+function requirePageAccess(pageKey) {
+  return (req, res, next) => {
+    if (req.user?.isAdmin || req.user?.permissions?.includes(pageKey)) return next();
+    return res.status(403).json({
+      success: false,
+      message: "You do not have access to this page.",
+    });
+  };
+}
+
+function canReadPage(req, pageKey) {
+  return Boolean(req.user?.isAdmin || req.user?.permissions?.includes(pageKey));
+}
+
+function scopedCustomerName(req) {
+  return req.user?.isAdmin ? "" : upperText(req.user?.customerName || "");
+}
+
+function requireCsrf(req, res, next) {
+  if (!req.path.startsWith("/api/")) return next();
+
+  const safeMethods = ["GET", "HEAD", "OPTIONS"];
+  if (safeMethods.includes(req.method)) return next();
+
+  if (req.path === "/api/login") return next();
+
+  const csrfCookie = req.cookies?.jobwork_csrf || "";
+  const csrfHeader = req.headers["x-csrf-token"] || "";
+
+  if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+    return res.status(403).json({
+      success: false,
+      message: "Security check failed. Please refresh and try again.",
     });
   }
 
@@ -120,6 +305,34 @@ function requireApiAuth(req, res, next) {
 
 async function ensureSchema() {
   await pool.query("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_users (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      username text NOT NULL UNIQUE,
+      full_name text DEFAULT '',
+      password_hash text NOT NULL,
+      is_admin boolean DEFAULT false,
+      customer_name text DEFAULT '',
+      is_active boolean DEFAULT true,
+      page_permissions text[] DEFAULT '{}',
+      created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+      updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS full_name text DEFAULT ''");
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin boolean DEFAULT false");
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS customer_name text DEFAULT ''");
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true");
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS page_permissions text[] DEFAULT '{}'");
+  await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT CURRENT_TIMESTAMP");
+  await pool.query(
+    `
+    INSERT INTO app_users (username, full_name, password_hash, is_admin, page_permissions)
+    SELECT $1, 'Administrator', $2, true, $3
+    WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE is_admin = true)
+    `,
+    [ADMIN_USERNAME, hashPassword(ADMIN_PASSWORD), PAGE_KEYS],
+  );
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vendors (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -298,7 +511,21 @@ app.set("trust proxy", 1);
 
 app.use(helmet({
   crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://unpkg.com"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", "http://localhost:5000", "http://127.0.0.1:5000"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'self'"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: "same-site" },
+  referrerPolicy: { policy: "no-referrer" },
 }));
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:8080,http://localhost:5000")
@@ -309,6 +536,16 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:8080,h
 app.use(cors({
   origin(origin, callback) {
     if (!origin) return callback(null, true);
+    if (process.env.NODE_ENV !== "production") {
+      try {
+        const { hostname } = new URL(origin);
+        if (["127.0.0.1", "localhost"].includes(hostname)) {
+          return callback(null, true);
+        }
+      } catch {
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    }
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
@@ -347,41 +584,175 @@ app.post("/api/login", loginLimiter, asyncHandler(async (req, res) => {
     throw error;
   }
 
+  const username = cleanText(req.body.username).toLowerCase();
   const password = cleanText(req.body.password);
 
-  if (password !== ADMIN_PASSWORD) {
+  if (!username || !password) {
+    const error = new Error("Login ID and password are required");
+    error.status = 400;
+    throw error;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT id, username, full_name, password_hash, is_admin, customer_name, page_permissions
+    FROM app_users
+    WHERE lower(username) = $1 AND is_active = true
+    LIMIT 1
+    `,
+    [username],
+  );
+
+  if (!result.rowCount || !verifyPassword(password, result.rows[0].password_hash)) {
     const error = new Error("Invalid password");
     error.status = 401;
     throw error;
   }
 
-  const token = createSessionToken();
+  const user = serializeUser(result.rows[0]);
+  const token = createSessionToken(user);
+  const csrfToken = createCsrfToken();
 
-  res.cookie("jobwork_session", token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-    maxAge: SESSION_HOURS * 60 * 60 * 1000,
-  });
+  res.cookie("jobwork_session", token, sessionCookieOptions());
+  res.cookie("jobwork_csrf", csrfToken, csrfCookieOptions());
 
   res.json({
     success: true,
-    token,
+    csrfToken,
+    user,
+    pages: PAGE_DEFINITIONS,
   });
 }));
 
 app.post("/api/logout", (req, res) => {
-  res.clearCookie("jobwork_session", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
-  });
+  res.clearCookie("jobwork_session", clearSessionCookieOptions());
+  res.clearCookie("jobwork_csrf", clearSessionCookieOptions());
 
   res.json({ success: true });
 });
 
 app.use(requireApiAuth);
+app.use(requireCsrf);
 app.use("/api", apiLimiter);
+
+app.get("/api/me", (req, res) => {
+  res.json({
+    success: true,
+    user: req.user,
+    pages: PAGE_DEFINITIONS,
+  });
+});
+
+app.get("/api/users", requireAdmin, asyncHandler(async (req, res) => {
+  const result = await pool.query(
+    `
+    SELECT id, username, full_name AS "fullName", is_admin AS "isAdmin",
+      customer_name AS "customerName", is_active AS "isActive",
+      page_permissions AS "permissions", created_at AS "createdAt"
+    FROM app_users
+    ORDER BY is_active DESC, username
+    `,
+  );
+  res.json({
+    success: true,
+    users: result.rows.map((user) => ({
+      ...user,
+      permissions: user.isAdmin ? PAGE_KEYS : normalizePermissions(user.permissions),
+    })),
+    pages: PAGE_DEFINITIONS,
+  });
+}));
+
+app.post("/api/users", requireAdmin, asyncHandler(async (req, res) => {
+  const username = cleanText(requiredText(req.body.username, "Login ID")).toLowerCase();
+  const fullName = cleanText(req.body.fullName);
+  const password = requiredText(req.body.password, "Password");
+  const isAdmin = Boolean(req.body.isAdmin);
+  const customerName = await validateCustomerLink(upperText(req.body.customerName));
+  const permissions = isAdmin ? PAGE_KEYS : normalizePermissions(req.body.permissions);
+
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    const error = new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    error.status = 400;
+    throw error;
+  }
+
+  const result = await pool.query(
+    `
+    INSERT INTO app_users (username, full_name, password_hash, is_admin, customer_name, page_permissions)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, username, full_name AS "fullName", is_admin AS "isAdmin",
+      customer_name AS "customerName", is_active AS "isActive", page_permissions AS "permissions"
+    `,
+    [username, fullName, hashPassword(password), isAdmin, customerName, permissions],
+  );
+
+  res.json({ success: true, user: result.rows[0] });
+}));
+
+app.patch("/api/users/:id", requireAdmin, asyncHandler(async (req, res) => {
+  const current = await pool.query("SELECT id, is_admin FROM app_users WHERE id = $1", [req.params.id]);
+  if (!current.rowCount) {
+    const error = new Error("User not found");
+    error.status = 404;
+    throw error;
+  }
+
+  const username = cleanText(requiredText(req.body.username, "Login ID")).toLowerCase();
+  const fullName = cleanText(req.body.fullName);
+  const isAdmin = Boolean(req.body.isAdmin);
+  const customerName = await validateCustomerLink(upperText(req.body.customerName));
+  const isActive = Boolean(req.body.isActive);
+  const permissions = isAdmin ? PAGE_KEYS : normalizePermissions(req.body.permissions);
+  const password = cleanText(req.body.password);
+
+  const values = [req.params.id, username, fullName, isAdmin, customerName, isActive, permissions];
+  let passwordSql = "";
+
+  if (password) {
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      const error = new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      error.status = 400;
+      throw error;
+    }
+    values.push(hashPassword(password));
+    passwordSql = `, password_hash = $${values.length}`;
+  }
+
+  const result = await pool.query(
+    `
+    UPDATE app_users
+    SET username = $2,
+      full_name = $3,
+      is_admin = $4,
+      customer_name = $5,
+      is_active = $6,
+      page_permissions = $7,
+      updated_at = CURRENT_TIMESTAMP
+      ${passwordSql}
+    WHERE id = $1
+    RETURNING id, username, full_name AS "fullName", is_admin AS "isAdmin",
+      customer_name AS "customerName", is_active AS "isActive", page_permissions AS "permissions"
+    `,
+    values,
+  );
+
+  res.json({ success: true, user: result.rows[0] });
+}));
+
+app.delete("/api/users/:id", requireAdmin, asyncHandler(async (req, res) => {
+  if (req.params.id === req.user.id) {
+    const error = new Error("You cannot deactivate your own login");
+    error.status = 400;
+    throw error;
+  }
+
+  await pool.query(
+    "UPDATE app_users SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+    [req.params.id],
+  );
+  res.json({ success: true });
+}));
 
 function cleanText(value) {
   return String(value ?? "").trim();
@@ -411,6 +782,20 @@ function requiredText(value, fieldName) {
   return text;
 }
 
+async function validateCustomerLink(customerName) {
+  if (!customerName) return "";
+  const result = await pool.query(
+    "SELECT customer_name FROM customers WHERE customer_name = $1 AND is_active = true LIMIT 1",
+    [customerName],
+  );
+  if (!result.rowCount) {
+    const error = new Error("Linked customer must exist in Customer Master");
+    error.status = 400;
+    throw error;
+  }
+  return customerName;
+}
+
 function asyncHandler(handler) {
   return async (req, res) => {
     try {
@@ -418,12 +803,15 @@ function asyncHandler(handler) {
     } catch (error) {
       console.error(error);
 
-      const status = error.status || 500;
+      const status = error.status || (error.code === "23505" ? 409 : 500);
       const isClientError = status >= 400 && status < 500;
+      const message = error.code === "23505"
+        ? "Duplicate record already exists"
+        : isClientError ? error.message : "Internal server error";
 
       res.status(status).json({
         success: false,
-        message: isClientError ? error.message : "Internal server error",
+        message,
       });
     }
   };
@@ -461,7 +849,7 @@ async function upsertRawMaterial(client, product) {
   );
 }
 
-app.get("/api/test-db", asyncHandler(async (req, res) => {
+app.get("/api/test-db", requireAdmin, asyncHandler(async (req, res) => {
   const result = await pool.query("SELECT NOW() AS current_time");
   res.json({
     success: true,
@@ -471,6 +859,21 @@ app.get("/api/test-db", asyncHandler(async (req, res) => {
 }));
 
 app.get("/api/state", asyncHandler(async (req, res) => {
+  const canDashboard = canReadPage(req, "dashboard");
+  const canCustomerDashboard = canReadPage(req, "customerDashboard");
+  const canMasters = canReadPage(req, "masters");
+  const canGrn = canReadPage(req, "grn");
+  const canVendor = canReadPage(req, "vendor");
+  const canSchedule = canReadPage(req, "schedule");
+  const canSales = canReadPage(req, "sales");
+  const canPlanning = canReadPage(req, "planning");
+  const canFlowStatus = canReadPage(req, "flowStatus");
+  const canOverview = canDashboard || canPlanning || canFlowStatus;
+  const customerName = scopedCustomerName(req);
+  const isCustomerScoped = Boolean(customerName);
+  const canCustomerData = canCustomerDashboard || (canSchedule && isCustomerScoped);
+  const emptyRows = { rows: [] };
+
   const [
     vendors,
     customers,
@@ -483,47 +886,48 @@ app.get("/api/state", asyncHandler(async (req, res) => {
     schedules,
     sales,
   ] = await Promise.all([
-    pool.query(`
+    (canMasters || canGrn || canVendor || canOverview) ? pool.query(`
       SELECT id, vendor_name AS "vendorName", city, contact, full_address AS "fullAddress",
         pan_card_url AS "panCardUrl", aadhar_card_url AS "aadharCardUrl",
         cancel_cheque_url AS "cancelChequeUrl", gst_url AS "gstUrl", other_doc_url AS "otherDocUrl"
       FROM vendors
       WHERE is_active = true
       ORDER BY vendor_name
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canMasters || canSchedule || canSales || canOverview || canCustomerData) ? pool.query(`
       SELECT id, customer_name AS "customerName", city, contact
       FROM customers
       WHERE is_active = true
+        ${isCustomerScoped ? "AND customer_name = $1" : ""}
       ORDER BY customer_name
-    `),
-    pool.query(`
+    `, isCustomerScoped ? [customerName] : []) : emptyRows,
+    (canMasters || canGrn || canVendor || canSchedule || canSales || canOverview || canCustomerData) ? pool.query(`
       SELECT id, bpcs_no AS "bpcsNo", vendor_name AS "vendorName", shape, grade,
         size_mm AS "sizeMm", input_weight_kg AS "inputWeightKg",
         net_input_weight_kg AS "netInputWeightKg"
       FROM product_masters
       WHERE is_active = true
       ORDER BY bpcs_no, vendor_name
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canMasters || canOverview || canCustomerData) ? pool.query(`
       SELECT code, description, stock_kg AS "stockKg", fixed_kg AS "fixedKg"
       FROM raw_materials
       ORDER BY code
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canGrn || canOverview || canCustomerData) ? pool.query(`
       SELECT id, supplier_invoice AS "supplierInvoice", product_id AS "productId",
         component_code AS "componentCode", vendor_name AS "vendorName",
         grn_date AS "grnDate", qty_mt AS "qtyMt"
       FROM bos_grns
       ORDER BY grn_date DESC, created_at DESC
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canGrn || canVendor || canOverview || canCustomerData) ? pool.query(`
       SELECT id, bos_grn_id AS "bosGrnId", lot_no AS "lotNo", received_date AS "grnDate",
         received_mt AS "receivedMt", remarks
       FROM vendor_end_grns
       ORDER BY received_date DESC, created_at DESC
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canGrn || canVendor || canSales || canOverview || canCustomerData) ? pool.query(`
       SELECT id, bos_grn_id AS "bosGrnId", lot_no AS "lotNo", vendor, component_code AS "componentCode",
         issue_date AS "issueDate", raw_issued_kg AS "rawIssuedKg",
         output_stage AS "outputStage", produced_qty AS "producedQty",
@@ -531,27 +935,29 @@ app.get("/api/state", asyncHandler(async (req, res) => {
         receipt_date AS "receiptDate"
       FROM job_work_lots
       ORDER BY issue_date DESC, created_at DESC
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canVendor || canOverview || canCustomerData) ? pool.query(`
       SELECT id, component_code AS "componentCode", production_date AS "productionDate",
         lot_no AS "lotNo",
         semi_finished_pieces AS "semiFinishedPieces",
         scrap_mt AS "scrapMt", remarks
       FROM vendor_productions
       ORDER BY production_date DESC, created_at DESC
-    `),
-    pool.query(`
+    `) : emptyRows,
+    (canSchedule || canSales || canOverview || canCustomerData) ? pool.query(`
       SELECT id, customer, component_code AS "componentCode", due_date AS "dueDate",
         required_qty AS "requiredQty"
       FROM customer_schedules
+      ${isCustomerScoped ? "WHERE customer = $1" : ""}
       ORDER BY due_date ASC
-    `),
-    pool.query(`
+    `, isCustomerScoped ? [customerName] : []) : emptyRows,
+    (canSales || canOverview || canCustomerData) ? pool.query(`
       SELECT id, customer, component_code AS "componentCode", sale_date AS "saleDate",
         invoice_no AS "invoiceNo", sold_qty AS "soldQty", rate_per_piece AS "ratePerPiece", remarks
       FROM customer_sales
+      ${isCustomerScoped ? "WHERE customer = $1" : ""}
       ORDER BY sale_date DESC, created_at DESC
-    `),
+    `, isCustomerScoped ? [customerName] : []) : emptyRows,
   ]);
 
   res.json({
@@ -569,7 +975,7 @@ app.get("/api/state", asyncHandler(async (req, res) => {
   });
 }));
 
-app.post("/api/vendors", asyncHandler(async (req, res) => {
+app.post("/api/vendors", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const vendorName = upperText(requiredText(req.body.vendorName, "Vendor name"));
   const city = cleanText(req.body.city);
   const contact = cleanText(req.body.contact);
@@ -590,7 +996,7 @@ app.post("/api/vendors", asyncHandler(async (req, res) => {
   res.json({ success: true, vendor: result.rows[0] });
 }));
 
-app.post("/api/vendors/:id/documents", asyncHandler(async (req, res) => {
+app.post("/api/vendors/:id/documents", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   await new Promise((resolve, reject) => {
     uploadDocs(req, res, (err) => {
       if (err) reject(err);
@@ -605,6 +1011,7 @@ app.post("/api/vendors/:id/documents", asyncHandler(async (req, res) => {
     if (!file) continue;
 
     const safeOriginalName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+    validateDocumentFile(file);
 
     await pool.query(
       `
@@ -635,7 +1042,7 @@ app.post("/api/vendors/:id/documents", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.get("/api/vendors/:id/documents/:fieldName", asyncHandler(async (req, res) => {
+app.get("/api/vendors/:id/documents/:fieldName", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   if (!DOCUMENT_FIELDS[req.params.fieldName]) {
     const error = new Error("Document field not found");
     error.status = 404;
@@ -664,7 +1071,7 @@ res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
 res.send(doc.data);
 }));
 
-app.post("/api/customers", asyncHandler(async (req, res) => {
+app.post("/api/customers", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const customerName = upperText(requiredText(req.body.customerName, "Customer name"));
   const city = cleanText(req.body.city);
   const contact = cleanText(req.body.contact);
@@ -681,7 +1088,7 @@ app.post("/api/customers", asyncHandler(async (req, res) => {
   res.json({ success: true, customer: result.rows[0] });
 }));
 
-app.post("/api/products", asyncHandler(async (req, res) => {
+app.post("/api/products", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const product = {
     bpcsNo: upperText(requiredText(req.body.bpcsNo, "BPCS No")),
     vendorName: upperText(requiredText(req.body.vendorName, "Vendor name")),
@@ -727,7 +1134,7 @@ app.post("/api/products", asyncHandler(async (req, res) => {
   res.json({ success: true, product: result.rows[0] });
 }));
 
-app.post("/api/bos-grns", asyncHandler(async (req, res) => {
+app.post("/api/bos-grns", requirePageAccess("grn"), asyncHandler(async (req, res) => {
   const result = await pool.query(
     `
     INSERT INTO bos_grns (supplier_invoice, product_id, component_code, vendor_name, grn_date, qty_mt)
@@ -746,7 +1153,7 @@ app.post("/api/bos-grns", asyncHandler(async (req, res) => {
   res.json({ success: true, id: result.rows[0].id });
 }));
 
-app.post("/api/vendor-end-grns", asyncHandler(async (req, res) => {
+app.post("/api/vendor-end-grns", requirePageAccess("vendor"), asyncHandler(async (req, res) => {
   const lotNo = upperText(requiredText(req.body.lotNo || req.body.bosGrnId, "Job Work assignment"));
   const receivedMt = toNumber(req.body.receivedMt, "Received MT", 0.001);
 
@@ -780,7 +1187,7 @@ app.post("/api/vendor-end-grns", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.post("/api/job-work-lots", asyncHandler(async (req, res) => {
+app.post("/api/job-work-lots", requirePageAccess("grn"), asyncHandler(async (req, res) => {
   const lotNo = upperText(requiredText(req.body.lotNo, "Lot no"));
   const bosGrnId = requiredText(req.body.bosGrnId, "BOS GRN");
   const vendor = upperText(requiredText(req.body.vendor, "Vendor"));
@@ -841,7 +1248,7 @@ app.post("/api/job-work-lots", asyncHandler(async (req, res) => {
   res.json({ success: true, id });
 }));
 
-app.put("/api/job-work-lots/:lotNo/receipt", asyncHandler(async (req, res) => {
+app.put("/api/job-work-lots/:lotNo/receipt", requirePageAccess("vendor"), asyncHandler(async (req, res) => {
   const producedQty = toNumber(req.body.producedQty, "Produced qty");
   const endCutKg = toNumber(req.body.endCutKg ?? req.body.scrapKg ?? 0, "End cut KG");
   const receiptDate = requiredText(req.body.receiptDate, "Receipt date");
@@ -928,7 +1335,7 @@ app.put("/api/job-work-lots/:lotNo/receipt", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.post("/api/vendor-productions", asyncHandler(async (req, res) => {
+app.post("/api/vendor-productions", requirePageAccess("vendor"), asyncHandler(async (req, res) => {
   const lotNo = upperText(requiredText(req.body.lotNo, "Lot no"));
   const componentCode = upperText(requiredText(req.body.componentCode, "Component code"));
   const semiFinishedPieces = toNumber(req.body.semiFinishedPieces, "Semi finished pieces");
@@ -994,8 +1401,15 @@ app.post("/api/vendor-productions", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.post("/api/schedules", asyncHandler(async (req, res) => {
-  const customer = upperText(requiredText(req.body.customer, "Customer"));
+app.post("/api/schedules", requirePageAccess("schedule"), asyncHandler(async (req, res) => {
+  const assignedCustomer = scopedCustomerName(req);
+  if (!req.user?.isAdmin && !assignedCustomer) {
+    const error = new Error("Customer login is not linked to a Customer Master record");
+    error.status = 403;
+    throw error;
+  }
+
+  const customer = assignedCustomer || upperText(requiredText(req.body.customer, "Customer"));
   const componentCode = upperText(requiredText(req.body.componentCode, "Component code"));
   const dueDate = requiredText(req.body.dueDate, "Due date");
   const requiredQty = toNumber(req.body.requiredQty, "Required qty", 1);
@@ -1033,7 +1447,7 @@ app.post("/api/schedules", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.post("/api/sales", asyncHandler(async (req, res) => {
+app.post("/api/sales", requirePageAccess("sales"), asyncHandler(async (req, res) => {
   const customer = upperText(requiredText(req.body.customer, "Customer"));
   const componentCode = upperText(requiredText(req.body.componentCode, "Component code"));
   const saleDate = requiredText(req.body.saleDate, "Sale date");
@@ -1131,7 +1545,7 @@ app.post("/api/sales", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.patch("/api/vendors/:id", asyncHandler(async (req, res) => {
+app.patch("/api/vendors/:id", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const vendorName = upperText(requiredText(req.body.vendorName, "Vendor name"));
   const city = cleanText(req.body.city);
   const contact = cleanText(req.body.contact);
@@ -1153,7 +1567,7 @@ app.patch("/api/vendors/:id", asyncHandler(async (req, res) => {
   res.json({ success: true, vendor: result.rows[0] });
 }));
 
-app.delete("/api/vendors/:id", asyncHandler(async (req, res) => {
+app.delete("/api/vendors/:id", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const vendor = await pool.query("SELECT vendor_name FROM vendors WHERE id = $1", [req.params.id]);
   if (vendor.rowCount) {
     const used = await pool.query(
@@ -1170,7 +1584,7 @@ app.delete("/api/vendors/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/customers/:id", asyncHandler(async (req, res) => {
+app.delete("/api/customers/:id", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const customer = await pool.query("SELECT customer_name FROM customers WHERE id = $1", [req.params.id]);
   if (customer.rowCount) {
     const used = await pool.query(
@@ -1191,7 +1605,7 @@ app.delete("/api/customers/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/products/:id", asyncHandler(async (req, res) => {
+app.delete("/api/products/:id", requirePageAccess("masters"), asyncHandler(async (req, res) => {
   const product = await pool.query("SELECT bpcs_no FROM product_masters WHERE id = $1", [req.params.id]);
   if (product.rowCount) {
     const bpcsNo = product.rows[0].bpcs_no;
@@ -1216,7 +1630,7 @@ app.delete("/api/products/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/bos-grns/:id", asyncHandler(async (req, res) => {
+app.delete("/api/bos-grns/:id", requirePageAccess("grn"), asyncHandler(async (req, res) => {
   await withTransaction(async (client) => {
     const current = await client.query("SELECT component_code, qty_mt FROM bos_grns WHERE id = $1", [req.params.id]);
     if (!current.rowCount) return;
@@ -1234,7 +1648,7 @@ app.delete("/api/bos-grns/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/vendor-end-grns/:id", asyncHandler(async (req, res) => {
+app.delete("/api/vendor-end-grns/:id", requirePageAccess("vendor"), asyncHandler(async (req, res) => {
   const grn = await pool.query("SELECT lot_no FROM vendor_end_grns WHERE id = $1", [req.params.id]);
   if (grn.rowCount) {
     const lotNo = grn.rows[0].lot_no;
@@ -1257,7 +1671,7 @@ app.delete("/api/vendor-end-grns/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/job-work-lots/:lotNo", asyncHandler(async (req, res) => {
+app.delete("/api/job-work-lots/:lotNo", requirePageAccess("grn"), asyncHandler(async (req, res) => {
   await withTransaction(async (client) => {
     const lotNo = upperText(req.params.lotNo);
     const lot = await client.query(
@@ -1292,7 +1706,7 @@ app.delete("/api/job-work-lots/:lotNo", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/vendor-productions/:id", asyncHandler(async (req, res) => {
+app.delete("/api/vendor-productions/:id", requirePageAccess("vendor"), asyncHandler(async (req, res) => {
   const entry = await pool.query("SELECT lot_no FROM vendor_productions WHERE id = $1", [req.params.id]);
   if (entry.rowCount) {
     const lot = await pool.query(
@@ -1309,29 +1723,46 @@ app.delete("/api/vendor-productions/:id", asyncHandler(async (req, res) => {
   res.json({ success: true });
 }));
 
-app.delete("/api/schedules/:id", asyncHandler(async (req, res) => {
-  await pool.query("DELETE FROM customer_schedules WHERE id = $1", [req.params.id]);
+app.delete("/api/schedules/:id", requirePageAccess("schedule"), asyncHandler(async (req, res) => {
+  const assignedCustomer = scopedCustomerName(req);
+  const result = await pool.query(
+    `
+    DELETE FROM customer_schedules
+    WHERE id = $1
+      ${assignedCustomer ? "AND customer = $2" : ""}
+    `,
+    assignedCustomer ? [req.params.id, assignedCustomer] : [req.params.id],
+  );
+  if (assignedCustomer && !result.rowCount) {
+    const error = new Error("Schedule not found for your customer account");
+    error.status = 404;
+    throw error;
+  }
   res.json({ success: true });
 }));
 
-app.delete("/api/sales/:id", asyncHandler(async (req, res) => {
+app.delete("/api/sales/:id", requirePageAccess("sales"), asyncHandler(async (req, res) => {
   await pool.query("DELETE FROM customer_sales WHERE id = $1", [req.params.id]);
   res.json({ success: true });
 }));
 
 app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
 app.get("/index.html", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
 app.get("/app.js", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.type("application/javascript").sendFile(path.join(publicDir, "app.js"));
 });
 
 app.get("/styles.css", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.type("text/css").sendFile(path.join(publicDir, "styles.css"));
 });
 
@@ -1342,13 +1773,18 @@ app.get("*", (req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-ensureSchema()
+Promise.resolve()
+  .then(async () => {
+    if (!SKIP_SCHEMA_CHECK) {
+      await ensureSchema();
+    }
+  })
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Job Work Backend running on http://localhost:${PORT}`);
     });
   })
   .catch((error) => {
-    console.error("Backend schema check failed", error);
+    console.error("Backend startup failed", error);
     process.exit(1);
   });

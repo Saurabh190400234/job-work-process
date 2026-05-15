@@ -5,7 +5,9 @@ Web app for tracking steel bar raw material received from suppliers, issued to v
 ## Open
 
 1. Apply `backend/schema.sql` to the PostgreSQL database if the tables are not already present.
-2. Configure `backend/.env` with `DATABASE_URL` and optional `DB_SSL=true`.
+2. Configure `backend/.env` with `DATABASE_URL`, `ADMIN_PASSWORD`, `AUTH_SECRET` and optional `DB_SSL=true`.
+   `ADMIN_USERNAME` defaults to `admin`. `AUTH_SECRET` must be at least 32 characters. New/reset user passwords must be at least 12 characters.
+   For production deployments where schema changes are applied manually after backup, set `SKIP_SCHEMA_CHECK=true`.
 3. Start the backend:
 
 ```sh
@@ -21,6 +23,7 @@ node dev-server.js
 ```
 
 5. Open `http://127.0.0.1:8080`.
+6. Login with the bootstrap admin ID/password, then use `Access Control` to create user logins and assign page access.
 
 ## Main Flow
 

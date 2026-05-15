@@ -6,43 +6,138 @@ const today = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 }).format(new Date());
 const API_BASE = ["localhost", "127.0.0.1"].includes(window.location.hostname) && window.location.port === "8080"
-  ? "http://localhost:5000/api"
+  ? `http://${window.location.hostname}:5000/api`
   : "/api";
 const API_ORIGIN = API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : "";
-const API_TOKEN_KEY = "jobWorkApiToken";
-
-function getApiToken() {
-  return sessionStorage.getItem(API_TOKEN_KEY) || "";
-}
+let currentUser = null;
+let pageDefinitions = [];
+let accessUsers = [];
 
 function clearApiToken() {
-  sessionStorage.removeItem(API_TOKEN_KEY);
+  sessionStorage.removeItem("jobWorkApiToken");
 }
 
-async function ensureApiToken() {
-  const existingToken = getApiToken();
-  if (existingToken) return existingToken;
+function getCookieValue(name) {
+  return document.cookie
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith(`${name}=`))
+    ?.slice(name.length + 1) || "";
+}
 
-  const password = window.prompt("Admin password enter karein");
-  if (!password) {
-    throw new Error("Login required");
+function csrfHeaders(method = "GET", headers = {}) {
+  const safeMethods = ["GET", "HEAD", "OPTIONS"];
+  if (safeMethods.includes(String(method || "GET").toUpperCase())) {
+    return { ...headers };
   }
 
-const response = await fetch(`${API_BASE}/login`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  credentials: "include",
-  body: JSON.stringify({ password }),
-});
+  const csrfToken = getCookieValue("jobwork_csrf");
+  return {
+    ...headers,
+    ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+  };
+}
+
+function authHeaders(headers = {}, method = "GET") {
+  return csrfHeaders(method, headers);
+}
+
+function showLogin(message = "") {
+  currentUser = null;
+  document.body.classList.remove("auth-loading", "auth-ready");
+  document.body.classList.add("auth-login");
+  const error = document.getElementById("loginError");
+  if (error) error.textContent = message;
+}
+
+function showApp() {
+  document.body.classList.remove("auth-loading", "auth-login");
+  document.body.classList.add("auth-ready");
+}
+
+function canAccessView(viewKey) {
+  if (!currentUser) return false;
+  if (viewKey === "access") return currentUser.isAdmin;
+  return currentUser.isAdmin || currentUser.permissions.includes(viewKey);
+}
+
+function currentCustomerName() {
+  return String(currentUser?.customerName || "").trim().toUpperCase();
+}
+
+function activateView(viewKey) {
+  if (!canAccessView(viewKey)) {
+    showToast("Is page ka access allowed nahi hai", "warn");
+    return;
+  }
+
+  elements.navItems.forEach((navItem) => navItem.classList.toggle("active", navItem.dataset.view === viewKey));
+  elements.views.forEach((view) => view.classList.toggle("active", view.id === viewKey));
+
+  if (viewKey === "access") {
+    loadAccessUsers();
+  }
+}
+
+function applyUserAccess() {
+  elements.navItems.forEach((item) => {
+    item.hidden = !canAccessView(item.dataset.view);
+  });
+
+  const activeView = document.querySelector(".view.active")?.id;
+  if (!activeView || !canAccessView(activeView)) {
+    const firstAllowed = [...elements.navItems].find((item) => !item.hidden)?.dataset.view;
+    if (firstAllowed) activateView(firstAllowed);
+  }
+
+  const userName = document.getElementById("currentUserName");
+  if (userName) {
+    userName.textContent = `${currentUser.fullName || currentUser.username}${currentUser.isAdmin ? " (Admin)" : ""}`;
+  }
+}
+
+async function loginUser(username, password) {
+  const response = await fetch(`${API_BASE}/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      username: String(username || "").trim(),
+      password: String(password || "").trim(),
+    }),
+  });
+
+  const rawBody = await response.text();
+  let data = {};
+  try {
+    data = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    data = {};
+  }
+  if (!response.ok || !data.user) {
+    const detail = rawBody && !data.message ? rawBody.slice(0, 120) : "";
+    throw new Error(data.message || `Login failed (${response.status})${detail ? `: ${detail}` : ""}`);
+  }
+
+  clearApiToken();
+  currentUser = data.user;
+  pageDefinitions = data.pages || [];
+  return data;
+}
+
+async function loadCurrentUser() {
+  const response = await fetch(`${API_BASE}/me`, {
+    credentials: "include",
+  });
 
   const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || !data.token) {
-    throw new Error(data.message || "Login failed");
+  if (!response.ok || !data.user) {
+    throw new Error(data.message || "Login required");
   }
 
-  sessionStorage.setItem(API_TOKEN_KEY, data.token);
-  return data.token;
+  currentUser = data.user;
+  pageDefinitions = data.pages || [];
+  return data;
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────
@@ -53,6 +148,10 @@ function showToast(message, type = "success") {
   el.textContent = message;
   container.appendChild(el);
   setTimeout(() => el.remove(), 3100);
+}
+
+function refreshIcons() {
+  if (window.lucide) lucide.createIcons();
 }
 
 // ── Confirm dialog ─────────────────────────────────────────────────────
@@ -150,6 +249,18 @@ const elements = {
   receiptLotSelect: document.querySelector("#receiptLotSelect"),
   scheduleComponentSelect: document.querySelector("#scheduleComponentSelect"),
   salesComponentSelect: document.querySelector("#salesComponentSelect"),
+  loginForm: document.querySelector("#loginForm"),
+  logoutButton: document.querySelector("#logoutButton"),
+  accessUserForm: document.querySelector("#accessUserForm"),
+  accessPermissions: document.querySelector("#accessPermissions"),
+  accessUserTable: document.querySelector("#accessUserTable"),
+  accessCustomerSelect: document.querySelector("#accessCustomerSelect"),
+  customerSummaryGrid: document.querySelector("#customerSummaryGrid"),
+  customerPriorityTable: document.querySelector("#customerPriorityTable"),
+  customerMaterialTable: document.querySelector("#customerMaterialTable"),
+  customerSalesSummary: document.querySelector("#customerSalesSummary"),
+  customerSalesHistoryTable: document.querySelector("#customerSalesHistoryTable"),
+  cancelUserEdit: document.querySelector("#cancelUserEdit"),
 };
 
 async function loadStateFromApi() {
@@ -161,12 +272,21 @@ async function loadStateFromApi() {
 
     const el = document.getElementById("lastSaved");
     if (el) el.textContent = "Loaded from PostgreSQL";
+    return true;
   } catch (error) {
     console.error(error);
+
+    if (String(error.message || "").toLowerCase().includes("unauthorized")) {
+      clearApiToken();
+      showLogin("Session expire ho gaya. Please login again.");
+      return false;
+    }
+
     showToast(error.message || "Database load failed. PostgreSQL connection check karein.", "error");
 
     state = normalizeState({});
     renderAll();
+    return false;
   }
 }
 
@@ -758,9 +878,26 @@ function renderSelects() {
   elements.scheduleCustomerSelect.innerHTML = customerPlaceholder + state.customers
     .map((customer) => `<option value="${h(customer.customerName)}">${h(customer.customerName)}</option>`)
     .join("");
+  const customerName = currentCustomerName();
+  if (customerName && !currentUser?.isAdmin) {
+    const hasCustomerOption = [...elements.scheduleCustomerSelect.options].some((option) => option.value === customerName);
+    if (!hasCustomerOption) {
+      elements.scheduleCustomerSelect.insertAdjacentHTML("beforeend", `<option value="${h(customerName)}">${h(customerName)}</option>`);
+    }
+    elements.scheduleCustomerSelect.value = customerName;
+    elements.scheduleCustomerSelect.disabled = true;
+  } else {
+    elements.scheduleCustomerSelect.disabled = false;
+  }
+
   elements.salesCustomerSelect.innerHTML = customerPlaceholder + state.customers
     .map((customer) => `<option value="${h(customer.customerName)}">${h(customer.customerName)}</option>`)
     .join("");
+  if (elements.accessCustomerSelect) {
+    elements.accessCustomerSelect.innerHTML = `<option value="">No customer link</option>` + state.customers
+      .map((customer) => `<option value="${h(customer.customerName)}">${h(customer.customerName)}</option>`)
+      .join("");
+  }
 
   const componentOptions = allWorkItems()
     .map((component) => `<option value="${h(component.code)}">${h(component.code)} - ${h(component.name)}</option>`)
@@ -801,7 +938,7 @@ function renderSelects() {
 }
 
 function renderActionLaunchers() {
-  document.querySelectorAll("[data-open-form='issueForm'], [data-open-form='vendorEndGrnForm'], [data-open-form='receiptForm']").forEach((button) => {
+  document.querySelectorAll("[data-open-form='issueForm'], [data-open-form='vendorEndGrnForm'], [data-open-form='receiptForm'], [data-open-form='salesForm']").forEach((button) => {
     button.closest(".form-launcher")?.remove();
   });
 }
@@ -1332,21 +1469,28 @@ function renderSchedules() {
 
 function renderSales() {
   const stockItems = allWorkItems().filter((component) =>
-    Number(component.producedStock || 0) > 0 || Number(component.soldStock || 0) > 0
+    Number(component.finishedStock || 0) > 0
   );
   document.querySelector("#salesStockList").innerHTML = stockItems.length === 0
-    ? `<div class="empty-state"><strong>No finished stock available for sale</strong></div>`
+    ? emptyState("No finished stock available for sale")
     : stockItems.map((component) => {
         const produced = Number(component.producedStock || 0);
         const sold = Number(component.soldStock || 0);
         const available = Number(component.finishedStock || 0);
-        const percentage = produced ? Math.min((available / produced) * 100, 100) : 0;
+        const pending = demandQuantity(component.code);
         return `
-          <div class="ready-item">
-            <strong>${h(component.code)} - ${h(component.name)}</strong>
-            <span>${number(produced)} produced / ${number(sold)} sold / ${number(available)} available</span>
-            <div class="progress"><div style="width:${percentage}%"></div></div>
-          </div>`;
+          <tr>
+            <td>${h(component.code)}<br><small style="color:var(--text-secondary)">${h(component.name)}</small></td>
+            <td>${number(produced)} pcs</td>
+            <td>${number(sold)} pcs</td>
+            <td><strong>${number(available)} pcs</strong></td>
+            <td>${number(pending)} pcs</td>
+            <td>
+              <button class="action-btn" data-sale-component="${h(component.code)}" title="Sale details fill karein">
+                <i data-lucide="receipt-indian-rupee"></i> Sale
+              </button>
+            </td>
+          </tr>`;
       }).join("");
 
   const sortedSales = [...state.sales].sort((a, b) => String(b.saleDate || "").localeCompare(String(a.saleDate || "")));
@@ -1523,7 +1667,6 @@ function renderComponentsReady() {
     ? emptyState("No components ready updates yet")
     : readyLots.map((lot) => {
         const component = getWorkItem(lot.componentCode);
-        const available = finishedAvailableQty(lot.componentCode);
         const canUpdate = canUpdateComponentsReady(lot);
         return `
           <tr>
@@ -1538,9 +1681,6 @@ function renderComponentsReady() {
             <td>
               <button class="action-btn" data-components-ready-lot="${h(lot.lotNo)}" title="Components ready update karein" ${canUpdate ? "" : "disabled"}>
                 <i data-lucide="package-check"></i> Update Ready
-              </button>
-              <button class="action-btn" data-sale-component="${h(lot.componentCode)}" title="Customer sale record karein" ${available <= 0 ? "disabled" : ""}>
-                <i data-lucide="receipt-indian-rupee"></i> Sale
               </button>
             </td>
           </tr>`;
@@ -1606,9 +1746,168 @@ function renderFlowStatus() {
   addTableSearch("flowStatusTable", "flowStatusTable", "Product / vendor / status search...");
 }
 
+function renderCustomerDashboard() {
+  if (!elements.customerSummaryGrid || !elements.customerMaterialTable) return;
+  const rows = allWorkItems().map((component) => {
+    const rawPerPieceKg = Number(component.rawPerPieceKg || component.netInputWeightKg || 0);
+    const bosRawKg = rawAssignableByComponent(component.code);
+    const vendorRawKg = state.lots
+      .filter((lot) => lot.componentCode === component.code)
+      .reduce((total, lot) => {
+        const receivedKg = vendorReceivedKgForLot(lot.lotNo);
+        const consumedKg = Number(lot.producedQty || 0) * rawPerPieceKg + Number(lot.endCutKg || 0);
+        return total + Math.max(receivedKg - consumedKg, 0);
+      }, 0);
+    const possibleFromBos = rawPerPieceKg > 0 ? Math.floor(bosRawKg / rawPerPieceKg) : 0;
+    const possibleAtVendor = rawPerPieceKg > 0 ? Math.floor(vendorRawKg / rawPerPieceKg) : 0;
+    const ready = Number(component.readyStock || 0);
+    const semi = Number(component.semiFinishedStock || 0);
+    const pending = demandQuantity(component.code);
+    const totalPossible = ready + possibleAtVendor + possibleFromBos;
+    const gap = Math.max(pending - totalPossible, 0);
+    const readyGap = Math.max(pending - ready, 0);
+    const decision = pending <= 0
+      ? { label: "Plan as needed", tone: "ok", rank: 4 }
+      : ready >= pending
+        ? { label: "Schedule safe", tone: "ok", rank: 3 }
+        : ready + possibleAtVendor >= pending
+          ? { label: "Wait for vendor output", tone: "warn", rank: 2 }
+          : totalPossible >= pending
+            ? { label: "BOS raw available", tone: "warn", rank: 1 }
+            : { label: "Raw shortage", tone: "danger", rank: 0 };
+
+    return { component, bosRawKg, vendorRawKg, possibleFromBos, possibleAtVendor, totalPossible, ready, semi, pending, readyGap, gap, decision };
+  });
+
+  const totals = rows.reduce((summary, row) => {
+    summary.possibleFromBos += row.possibleFromBos;
+    summary.possibleAtVendor += row.possibleAtVendor;
+    summary.ready += row.ready;
+    summary.pending += row.pending;
+    summary.gap += row.gap;
+    return summary;
+  }, { possibleFromBos: 0, possibleAtVendor: 0, ready: 0, pending: 0, gap: 0 });
+
+  elements.customerSummaryGrid.innerHTML = `
+    <div class="customer-summary-card ok">
+      <span>Ready Now</span>
+      <strong>${number(totals.ready)} pcs</strong>
+    </div>
+    <div class="customer-summary-card warn">
+      <span>Vendor Can Make</span>
+      <strong>${number(totals.possibleAtVendor)} pcs</strong>
+    </div>
+    <div class="customer-summary-card warn">
+      <span>BOS Raw Can Make</span>
+      <strong>${number(totals.possibleFromBos)} pcs</strong>
+    </div>
+    <div class="customer-summary-card">
+      <span>Pending Schedule</span>
+      <strong>${number(totals.pending)} pcs</strong>
+    </div>
+    <div class="customer-summary-card ${totals.gap > 0 ? "danger" : "ok"}">
+      <span>Shortage Gap</span>
+      <strong>${number(totals.gap)} pcs</strong>
+    </div>
+  `;
+
+  const priorityRows = rows
+    .filter((row) => row.pending > 0)
+    .sort((a, b) => (b.gap - a.gap) || (a.decision.rank - b.decision.rank) || (b.pending - a.pending));
+
+  if (elements.customerPriorityTable) {
+    elements.customerPriorityTable.innerHTML = priorityRows.length === 0
+      ? emptyState("No pending customer schedule")
+      : priorityRows.map((row) => `
+          <tr>
+            <td>${h(row.component.code)} - ${h(row.component.name)}</td>
+            <td>${number(row.pending)} pcs</td>
+            <td>${number(row.ready)} pcs</td>
+            <td>${number(row.totalPossible)} pcs</td>
+            <td class="${row.gap > 0 ? "text-danger" : "text-ok"}">${number(row.gap)} pcs</td>
+            <td><span class="badge ${row.decision.tone}">${h(row.decision.label)}</span></td>
+          </tr>
+        `).join("");
+  }
+
+  const sortedRows = [...rows].sort((a, b) => (b.pending - a.pending) || (b.gap - a.gap) || a.component.code.localeCompare(b.component.code));
+
+  elements.customerMaterialTable.innerHTML = sortedRows.length === 0
+    ? emptyState("No product availability found")
+    : sortedRows.map((row) => `
+        <tr>
+          <td>${h(row.component.code)} - ${h(row.component.name)}</td>
+          <td>${number(kgToMt(row.bosRawKg), 3)} MT</td>
+          <td>${number(kgToMt(row.vendorRawKg), 3)} MT</td>
+          <td>${number(row.possibleFromBos)} pcs</td>
+          <td>${number(row.possibleAtVendor)} pcs</td>
+          <td>${number(row.semi)} pcs</td>
+          <td>${number(row.ready)} pcs</td>
+          <td>${number(row.pending)} pcs</td>
+          <td class="${row.gap > 0 ? "text-danger" : "text-ok"}">${number(row.gap)} pcs</td>
+          <td><span class="badge ${row.decision.tone}">${h(row.decision.label)}</span></td>
+        </tr>
+      `).join("");
+
+  const sortedSales = [...state.sales].sort((a, b) => String(b.saleDate || "").localeCompare(String(a.saleDate || "")));
+  const totalSoldQty = sortedSales.reduce((sum, sale) => sum + Number(sale.soldQty || 0), 0);
+  const totalAmount = sortedSales.reduce((sum, sale) => sum + Number(sale.soldQty || 0) * Number(sale.ratePerPiece || 0), 0);
+  const lastSaleDate = sortedSales[0]?.saleDate ? formatIstDateTime(sortedSales[0].saleDate) : "-";
+  const productSales = new Map();
+  sortedSales.forEach((sale) => {
+    const current = productSales.get(sale.componentCode) || 0;
+    productSales.set(sale.componentCode, current + Number(sale.soldQty || 0));
+  });
+  const topProduct = [...productSales.entries()].sort((a, b) => b[1] - a[1])[0];
+
+  if (elements.customerSalesSummary) {
+    elements.customerSalesSummary.innerHTML = `
+      <div class="customer-sales-card">
+        <span>Total Sold</span>
+        <strong>${number(totalSoldQty)} pcs</strong>
+      </div>
+      <div class="customer-sales-card">
+        <span>Total Amount</span>
+        <strong>Rs ${number(totalAmount, 2)}</strong>
+      </div>
+      <div class="customer-sales-card">
+        <span>Last Sale</span>
+        <strong>${h(lastSaleDate)}</strong>
+      </div>
+      <div class="customer-sales-card">
+        <span>Top Product</span>
+        <strong>${topProduct ? `${h(topProduct[0])} (${number(topProduct[1])} pcs)` : "-"}</strong>
+      </div>
+    `;
+  }
+
+  if (elements.customerSalesHistoryTable) {
+    elements.customerSalesHistoryTable.innerHTML = sortedSales.length === 0
+      ? emptyState("No sales history yet")
+      : sortedSales.map((sale) => {
+          const qty = Number(sale.soldQty || 0);
+          const rate = Number(sale.ratePerPiece || 0);
+          const amount = qty * rate;
+          const product = getWorkItem(sale.componentCode);
+          return `
+            <tr>
+              <td>${h(formatIstDateTime(sale.saleDate))}</td>
+              <td>${h(sale.invoiceNo)}</td>
+              <td>${h(product ? `${product.code} - ${product.name}` : sale.componentCode)}</td>
+              <td>${number(qty)} pcs</td>
+              <td>${rate ? `Rs ${number(rate, 2)}` : "-"}</td>
+              <td>${amount ? `Rs ${number(amount, 2)}` : "-"}</td>
+              <td>${h(sale.remarks || "-")}</td>
+            </tr>
+          `;
+        }).join("");
+  }
+}
+
 function renderAll() {
   renderSelects();
   renderDashboard();
+  renderCustomerDashboard();
   renderMasters();
   renderLots();
   renderGrns();
@@ -1827,29 +2126,36 @@ function startComponentsReadyFromLot(lotNo) {
   form.elements.lotNo.dataset.flowLocked = "true";
 }
 
-function startSaleFromComponent(componentCode) {
+function startSaleFromStock(componentCode) {
   const component = getWorkItem(componentCode);
   if (!component) return;
+  const available = finishedAvailableQty(component.code);
+  if (available <= 0) {
+    showToast("Is component ka finished stock available nahi hai", "warn");
+    return;
+  }
+
   const form = elements.salesForm;
   form.reset();
   form.elements.componentCode.value = component.code;
   form.elements.saleDate.value = today;
+  form.elements.soldQty.value = "";
   updateSalesAvailability();
   openFormModal("salesForm");
   form.elements.componentCode.dataset.flowLocked = "true";
+  form.elements.customer.focus();
 }
 
 async function apiRequest(path, options = {}) {
-  const token = await ensureApiToken();
+const method = options.method || "GET";
 
 const response = await fetch(`${API_BASE}${path}`, {
-  ...options,
   credentials: "include",
-  headers: {
+  ...options,
+  headers: authHeaders({
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
     ...(options.headers || {}),
-  },
+  }, method),
 });
 
   let result = null;
@@ -1860,7 +2166,8 @@ const response = await fetch(`${API_BASE}${path}`, {
   }
 if (response.status === 401) {
   clearApiToken();
-  throw new Error("Session expired. Page refresh karke login karein.");
+  showLogin("Session expired. Dobara login karein.");
+  throw new Error("Session expired. Dobara login karein.");
 }
 
 if (!response.ok || result.success === false) {
@@ -1893,6 +2200,88 @@ async function deleteViaApi(path, successMessage) {
   }
 }
 
+function renderPermissionChecks(selectedPermissions = []) {
+  const selected = new Set(selectedPermissions);
+  const isAdmin = elements.accessUserForm?.elements.isAdmin.checked;
+  if (!elements.accessPermissions) return;
+
+  elements.accessPermissions.innerHTML = pageDefinitions
+    .map((page) => `
+      <label class="permission-item">
+        <input type="checkbox" name="permissions" value="${h(page.key)}"
+          ${selected.has(page.key) || isAdmin ? "checked" : ""}
+          ${isAdmin ? "disabled" : ""} />
+        ${h(page.label)}
+      </label>
+    `).join("");
+}
+
+function resetAccessForm() {
+  if (!elements.accessUserForm) return;
+  elements.accessUserForm.reset();
+  elements.accessUserForm.elements.userId.value = "";
+  elements.accessUserForm.elements.customerName.value = "";
+  elements.accessUserForm.elements.isActive.checked = true;
+  renderPermissionChecks([]);
+}
+
+function renderAccessUsers() {
+  if (!elements.accessUserTable) return;
+  elements.accessUserTable.innerHTML = accessUsers.length === 0
+    ? emptyState("No users created yet")
+    : accessUsers.map((user) => {
+      const pages = user.isAdmin
+        ? "All pages"
+        : (user.permissions || [])
+          .map((key) => pageDefinitions.find((page) => page.key === key)?.label || key)
+          .join(", ") || "-";
+      return `
+        <tr>
+          <td>${h(user.username)}</td>
+          <td>${h(user.fullName || "-")}</td>
+          <td><span class="badge ${user.isAdmin ? "ok" : "warn"}">${user.isAdmin ? "Admin" : "User"}</span></td>
+          <td>${h(user.customerName || "-")}</td>
+          <td>${h(pages)}</td>
+          <td><span class="badge ${user.isActive ? "ok" : "danger"}">${user.isActive ? "Active" : "Inactive"}</span></td>
+          <td>
+            <button class="row-action" data-edit-user="${h(user.id)}" title="Edit user"><i data-lucide="pencil"></i></button>
+            <button class="row-action" data-delete-user="${h(user.id)}" title="Deactivate user" ${user.id === currentUser?.id ? "disabled" : ""}><i data-lucide="user-x"></i></button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  refreshIcons();
+}
+
+async function loadAccessUsers() {
+  if (!currentUser?.isAdmin) return;
+  try {
+    const data = await apiRequest("/users");
+    accessUsers = data.users || [];
+    pageDefinitions = data.pages || pageDefinitions;
+    renderPermissionChecks([...elements.accessUserForm?.querySelectorAll("[name='permissions']:checked")].map((input) => input.value));
+    renderAccessUsers();
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || "Users load failed", "error");
+  }
+}
+
+function editAccessUser(userId) {
+  const user = accessUsers.find((item) => item.id === userId);
+  if (!user || !elements.accessUserForm) return;
+  const form = elements.accessUserForm;
+  form.elements.userId.value = user.id;
+  form.elements.username.value = user.username || "";
+  form.elements.fullName.value = user.fullName || "";
+  form.elements.password.value = "";
+  form.elements.customerName.value = user.customerName || "";
+  form.elements.isAdmin.checked = Boolean(user.isAdmin);
+  form.elements.isActive.checked = Boolean(user.isActive);
+  renderPermissionChecks(user.permissions || []);
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function setDefaultDates() {
   document.querySelectorAll('input[type="date"]').forEach((input) => {
     input.value = today;
@@ -1901,10 +2290,7 @@ function setDefaultDates() {
 
 elements.navItems.forEach((item) => {
   item.addEventListener("click", () => {
-    elements.navItems.forEach((navItem) => navItem.classList.remove("active"));
-    elements.views.forEach((view) => view.classList.remove("active"));
-    item.classList.add("active");
-    document.querySelector(`#${item.dataset.view}`).classList.add("active");
+    activateView(item.dataset.view);
   });
 });
 
@@ -1933,6 +2319,83 @@ elements.vendorNavItems.forEach((item) => {
     item.classList.add("active");
     document.querySelector(`#${item.dataset.vendorView}`).classList.add("active");
   });
+});
+
+elements.loginForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector("button[type='submit']");
+  const error = document.getElementById("loginError");
+
+  if (error) error.textContent = "";
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    await loginUser(form.elements.username.value, form.elements.password.value);
+    form.reset();
+    showApp();
+    applyUserAccess();
+    renderPermissionChecks([]);
+    await loadStateFromApi();
+    if (currentUser?.isAdmin) await loadAccessUsers();
+  } catch (err) {
+    console.error(err);
+    if (error) error.textContent = err.message || "Login failed";
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
+});
+
+elements.logoutButton?.addEventListener("click", async () => {
+  try {
+    await apiRequest("/logout", { method: "POST" });
+  } catch (error) {
+    console.error(error);
+  }
+
+  clearApiToken();
+  currentUser = null;
+  pageDefinitions = [];
+  accessUsers = [];
+  state = normalizeState({});
+  showLogin("Logged out successfully.");
+});
+
+elements.accessUserForm?.elements.isAdmin.addEventListener("change", () => {
+  const selected = [...elements.accessUserForm.querySelectorAll("[name='permissions']:checked")].map((input) => input.value);
+  renderPermissionChecks(selected);
+});
+
+elements.cancelUserEdit?.addEventListener("click", resetAccessForm);
+
+elements.accessUserForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = formData(form);
+  const userId = data.userId;
+  const permissions = [...form.querySelectorAll("[name='permissions']:checked")].map((input) => input.value);
+  const body = {
+    username: data.username,
+    fullName: data.fullName || "",
+    password: data.password || "",
+    customerName: data.customerName || "",
+    isAdmin: form.elements.isAdmin.checked,
+    isActive: form.elements.isActive.checked,
+    permissions,
+  };
+
+  try {
+    await apiRequest(userId ? `/users/${userId}` : "/users", {
+      method: userId ? "PATCH" : "POST",
+      body: JSON.stringify(body),
+    });
+    resetAccessForm();
+    await loadAccessUsers();
+    showToast(userId ? "User updated" : "User created");
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || "User save failed", "error");
+  }
 });
 
 elements.bosPartSelect.addEventListener("change", () => {
@@ -1985,13 +2448,10 @@ elements.vendorMasterForm.addEventListener("submit", async (event) => {
         const input = form.elements[name];
         if (input?.files?.length > 0) fd.append(name, input.files[0]);
       });
-      const token = await ensureApiToken();
 const docRes = await fetch(`${API_BASE}/vendors/${targetId}/documents`, {
   method: "POST",
   credentials: "include",
-  headers: {
-    Authorization: `Bearer ${token}`,
-  },
+  headers: authHeaders({}, "POST"),
   body: fd,
 });
       const docJson = await docRes.json().catch(() => ({}));
@@ -2210,7 +2670,7 @@ elements.scheduleForm.addEventListener("submit", async (event) => {
   const data = formData(form);
   try {
     await saveViaApi("/schedules", {
-      customer: data.customer,
+      customer: currentCustomerName() || data.customer,
       componentCode: data.componentCode,
       dueDate: data.dueDate,
       requiredQty: Number(data.requiredQty),
@@ -2283,13 +2743,34 @@ document.body.addEventListener("click", async (event) => {
 
   const saleComponent = event.target.closest("[data-sale-component]")?.dataset.saleComponent;
   if (saleComponent) {
-    startSaleFromComponent(saleComponent);
+    startSaleFromStock(saleComponent);
     return;
   }
 
   const openForm = event.target.closest("[data-open-form]")?.dataset.openForm;
   if (openForm) {
     openFormModal(openForm);
+    return;
+  }
+
+  const editUserId = event.target.closest("[data-edit-user]")?.dataset.editUser;
+  if (editUserId) {
+    editAccessUser(editUserId);
+    return;
+  }
+
+  const deleteUserId = event.target.closest("[data-delete-user]")?.dataset.deleteUser;
+  if (deleteUserId) {
+    const user = accessUsers.find((item) => item.id === deleteUserId);
+    if (!await showConfirm("Deactivate User", `"${user?.username || deleteUserId}" ka login deactivate karein?`, "Deactivate")) return;
+    try {
+      await apiRequest(`/users/${deleteUserId}`, { method: "DELETE" });
+      await loadAccessUsers();
+      showToast("User deactivated");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "User deactivate failed", "error");
+    }
     return;
   }
 
@@ -2398,4 +2879,18 @@ elements.issueForm.elements.rawIssuedKg.addEventListener("input", updateIssueRem
 
 initFormLaunchers();
 setDefaultDates();
-loadStateFromApi();
+
+(async function initAuth() {
+  try {
+    await loadCurrentUser();
+    showApp();
+    applyUserAccess();
+    renderPermissionChecks([]);
+    await loadStateFromApi();
+    if (currentUser?.isAdmin) await loadAccessUsers();
+  } catch (error) {
+    console.error(error);
+    clearApiToken();
+    showLogin("");
+  }
+})();

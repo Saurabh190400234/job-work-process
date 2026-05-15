@@ -1,5 +1,20 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE TABLE IF NOT EXISTS app_users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  username text NOT NULL UNIQUE,
+  full_name text DEFAULT '',
+  password_hash text NOT NULL,
+  is_admin boolean DEFAULT false,
+  customer_name text DEFAULT '',
+  is_active boolean DEFAULT true,
+  page_permissions text[] DEFAULT '{}',
+  created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+  updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS customer_name text DEFAULT '';
+
 CREATE TABLE IF NOT EXISTS vendors (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   vendor_name text NOT NULL UNIQUE,

@@ -3,9 +3,25 @@ require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const BASE_URL = process.env.API_BASE || "http://127.0.0.1:5000/api";
 
-let token = "";
+let sessionCookie = "";
+
+function captureCookies(response) {
+  const setCookies = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie")].filter(Boolean);
+
+  sessionCookie = setCookies
+    .map((cookie) => cookie.split(";")[0])
+    .filter(Boolean)
+    .join("; ");
+
+  if (!sessionCookie.includes("jobwork_session=")) {
+    throw new Error("Login did not return a session cookie");
+  }
+}
 
 async function login() {
+  const username = process.env.ADMIN_USERNAME || "admin";
   const password = process.env.ADMIN_PASSWORD;
 
   if (!password) {
@@ -15,23 +31,23 @@ async function login() {
   const response = await fetch(`${BASE_URL}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ username, password }),
   });
 
   const data = await response.json().catch(() => ({}));
 
-  if (!response.ok || !data.token) {
+  if (!response.ok || !data.user) {
     throw new Error(data.message || "Login failed for smoke test");
   }
 
-  token = data.token;
+  captureCookies(response);
   console.log("OK /login");
 }
 
 async function check(path, validate) {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: {
-      Authorization: `Bearer ${token}`,
+      Cookie: sessionCookie,
     },
   });
 
