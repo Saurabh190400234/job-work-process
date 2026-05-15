@@ -73,6 +73,69 @@ body {
   font-size: 0.9rem;
 }
 
+.login-card-secondary[hidden] {
+  display: none;
+}
+
+.password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+
+.password-toggle:hover {
+  background: var(--surface-2);
+  color: var(--primary-dark);
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.login-links {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.back-login-button {
+  justify-self: center;
+  margin-top: -4px;
+}
+
 button,
 input,
 select {

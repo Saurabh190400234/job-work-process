@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
+const nodemailer = require("nodemailer");
 const pool = require("./db");
 
 const DOCUMENT_FIELDS = {
@@ -91,6 +92,13 @@ const COOKIE_SAME_SITE = process.env.COOKIE_SAME_SITE || "strict";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const SKIP_SCHEMA_CHECK = process.env.SKIP_SCHEMA_CHECK === "true";
 const MIN_PASSWORD_LENGTH = 12;
+const RESET_TOKEN_MINUTES = Number(process.env.RESET_TOKEN_MINUTES || 30);
+const APP_BASE_URL = process.env.APP_BASE_URL || "";
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 
 function sessionCookieOptions() {
   return {
@@ -157,6 +165,61 @@ function verifyPassword(password, storedHash) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+function hashResetToken(token) {
+  return crypto
+    .createHash("sha256")
+    .update(String(token || ""))
+    .digest("hex");
+}
+
+function createResetToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function publicBaseUrl(req) {
+  if (APP_BASE_URL) return APP_BASE_URL.replace(/\/$/, "");
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function mailTransporter() {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !SMTP_FROM) return null;
+
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+  });
+}
+
+async function sendPasswordResetEmail(to, resetUrl) {
+  const transporter = mailTransporter();
+
+  if (!transporter) {
+    console.log("Password reset link:", resetUrl);
+    return false;
+  }
+
+  await transporter.sendMail({
+    from: SMTP_FROM,
+    to,
+    subject: "Reset your Job Work Control password",
+    text: [
+      "Password reset request received for Job Work Control.",
+      "",
+      `Reset link: ${resetUrl}`,
+      "",
+      `This link will expire in ${RESET_TOKEN_MINUTES} minutes.`,
+      "If you did not request this, please ignore this email.",
+    ].join("\n"),
+  });
+
+  return true;
+}
+
 function normalizePermissions(permissions = []) {
   const selected = Array.isArray(permissions) ? permissions : [];
   return [...new Set(selected.filter((permission) => PAGE_KEYS.includes(permission)))];
@@ -221,7 +284,7 @@ function verifySessionToken(token) {
 
 async function requireApiAuth(req, res, next) {
   if (!req.path.startsWith("/api/")) return next();
-  if (req.path === "/api/login") return next();
+  if (["/api/login", "/api/forgot-password", "/api/reset-password"].includes(req.path)) return next();
 
   const authHeader = req.headers.authorization || "";
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -325,6 +388,25 @@ async function ensureSchema() {
   await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true");
   await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS page_permissions text[] DEFAULT '{}'");
   await pool.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS updated_at timestamp DEFAULT CURRENT_TIMESTAMP");
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      token_hash text NOT NULL UNIQUE,
+      expires_at timestamp NOT NULL,
+      used_at timestamp,
+      created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+      request_ip text DEFAULT ''
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id
+    ON password_reset_tokens(user_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token_hash
+    ON password_reset_tokens(token_hash)
+  `);
   await pool.query(
     `
     INSERT INTO app_users (username, full_name, password_hash, is_admin, page_permissions)
@@ -566,6 +648,17 @@ const loginLimiter = rateLimit({
   },
 });
 
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many password reset attempts. Please try again later.",
+  },
+});
+
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 120,
@@ -621,6 +714,142 @@ app.post("/api/login", loginLimiter, asyncHandler(async (req, res) => {
     csrfToken,
     user,
     pages: PAGE_DEFINITIONS,
+  });
+}));
+
+app.post("/api/forgot-password", passwordResetLimiter, asyncHandler(async (req, res) => {
+  const username = cleanText(req.body.username).toLowerCase();
+
+  const genericResponse = {
+    success: true,
+    message: "If this login exists, password reset instructions have been sent.",
+  };
+
+  if (!username) {
+    return res.json(genericResponse);
+  }
+
+  const result = await pool.query(
+    `
+    SELECT id, username, is_active
+    FROM app_users
+    WHERE lower(username) = $1
+    LIMIT 1
+    `,
+    [username],
+  );
+
+  if (!result.rowCount || !result.rows[0].is_active) {
+    return res.json(genericResponse);
+  }
+
+  const user = result.rows[0];
+  const token = createResetToken();
+  const tokenHash = hashResetToken(token);
+  const resetUrl = `${publicBaseUrl(req)}/?resetToken=${encodeURIComponent(token)}`;
+
+  await pool.query(
+    `
+    INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, request_ip)
+    VALUES ($1, $2, CURRENT_TIMESTAMP + ($3 || ' minutes')::interval, $4)
+    `,
+    [user.id, tokenHash, RESET_TOKEN_MINUTES, req.ip || ""],
+  );
+
+  await sendPasswordResetEmail(user.username, resetUrl);
+
+  res.json(genericResponse);
+}));
+
+app.post("/api/reset-password", passwordResetLimiter, asyncHandler(async (req, res) => {
+  const token = cleanText(req.body.token);
+  const password = cleanText(req.body.password);
+  const confirmPassword = cleanText(req.body.confirmPassword);
+
+  if (!token) {
+    const error = new Error("Reset token is required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (!password || !confirmPassword) {
+    const error = new Error("New password and confirm password are required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (password !== confirmPassword) {
+    const error = new Error("Password and confirm password do not match");
+    error.status = 400;
+    throw error;
+  }
+
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    const error = new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    error.status = 400;
+    throw error;
+  }
+
+  const tokenHash = hashResetToken(token);
+
+  await withTransaction(async (client) => {
+    const result = await client.query(
+      `
+      SELECT prt.id, prt.user_id
+      FROM password_reset_tokens prt
+      JOIN app_users u ON u.id = prt.user_id
+      WHERE prt.token_hash = $1
+        AND prt.used_at IS NULL
+        AND prt.expires_at > CURRENT_TIMESTAMP
+        AND u.is_active = true
+      LIMIT 1
+      FOR UPDATE
+      `,
+      [tokenHash],
+    );
+
+    if (!result.rowCount) {
+      const error = new Error("Reset link is invalid or expired");
+      error.status = 400;
+      throw error;
+    }
+
+    const resetRow = result.rows[0];
+
+    await client.query(
+      `
+      UPDATE app_users
+      SET password_hash = $2,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      `,
+      [resetRow.user_id, hashPassword(password)],
+    );
+
+    await client.query(
+      `
+      UPDATE password_reset_tokens
+      SET used_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      `,
+      [resetRow.id],
+    );
+
+    await client.query(
+      `
+      UPDATE password_reset_tokens
+      SET used_at = CURRENT_TIMESTAMP
+      WHERE user_id = $1
+        AND used_at IS NULL
+        AND id <> $2
+      `,
+      [resetRow.user_id, resetRow.id],
+    );
+  });
+
+  res.json({
+    success: true,
+    message: "Password reset successfully. Please login with your new password.",
   });
 }));
 

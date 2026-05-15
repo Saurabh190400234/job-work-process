@@ -27,14 +27,94 @@
           Login ID
           <input name="username" autocomplete="username" required />
         </label>
+<label>
+  Password
+  <div class="password-field">
+    <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+    <button class="password-toggle" type="button" data-toggle-password="loginPassword" aria-label="Show password">
+      <i data-lucide="eye"></i>
+    </button>
+  </div>
+</label>
+
+<div class="login-links">
+  <button class="link-button" type="button" id="forgotPasswordLink">Forgot password?</button>
+</div>
+
+<div class="login-error" id="loginError"></div>
+
+<button class="primary-button login-button" type="submit">
+  <i data-lucide="log-in"></i>
+  Login
+</button>
+      </form>
+
+      <form class="login-card login-card-secondary" id="forgotPasswordForm" hidden>
+        <div class="brand login-brand">
+          <div class="brand-mark">JW</div>
+          <div>
+            <strong>Job Work Control</strong>
+            <span>Password recovery</span>
+          </div>
+        </div>
+        <div>
+          <p class="eyebrow">Recovery</p>
+          <h1>Forgot Password</h1>
+          <p>Apna Login ID enter karein. Agar login exists hai to reset link email par send hoga.</p>
+        </div>
         <label>
-          Password
-          <input name="password" type="password" autocomplete="current-password" required />
+          Login ID
+          <input name="username" autocomplete="username" required />
         </label>
-        <div class="login-error" id="loginError"></div>
+        <div class="login-error" id="forgotPasswordMessage"></div>
         <button class="primary-button login-button" type="submit">
-          <i data-lucide="log-in"></i>
-          Login
+          <i data-lucide="mail"></i>
+          Send Reset Link
+        </button>
+        <button class="link-button back-login-button" type="button" id="backToLoginFromForgot">
+          Back to login
+        </button>
+      </form>
+
+      <form class="login-card login-card-secondary" id="resetPasswordForm" hidden>
+        <div class="brand login-brand">
+          <div class="brand-mark">JW</div>
+          <div>
+            <strong>Job Work Control</strong>
+            <span>Create new password</span>
+          </div>
+        </div>
+        <div>
+          <p class="eyebrow">Reset</p>
+          <h1>Reset Password</h1>
+          <p>New password minimum 12 characters ka hona chahiye.</p>
+        </div>
+        <input name="token" type="hidden" />
+        <label>
+          New Password
+          <div class="password-field">
+            <input id="newResetPassword" name="password" type="password" autocomplete="new-password" required />
+            <button class="password-toggle" type="button" data-toggle-password="newResetPassword" aria-label="Show password">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </label>
+        <label>
+          Confirm Password
+          <div class="password-field">
+            <input id="confirmResetPassword" name="confirmPassword" type="password" autocomplete="new-password" required />
+            <button class="password-toggle" type="button" data-toggle-password="confirmResetPassword" aria-label="Show password">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </label>
+        <div class="login-error" id="resetPasswordMessage"></div>
+        <button class="primary-button login-button" type="submit">
+          <i data-lucide="key-round"></i>
+          Reset Password
+        </button>
+        <button class="link-button back-login-button" type="button" id="backToLoginFromReset">
+          Back to login
         </button>
       </form>
     </section>

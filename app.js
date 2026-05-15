@@ -46,8 +46,26 @@ function showLogin(message = "") {
   currentUser = null;
   document.body.classList.remove("auth-loading", "auth-ready");
   document.body.classList.add("auth-login");
+  showAuthCard("login");
   const error = document.getElementById("loginError");
   if (error) error.textContent = message;
+}
+
+function showAuthCard(card) {
+  const loginCard = elements.loginForm;
+  const forgotCard = elements.forgotPasswordForm;
+  const resetCard = elements.resetPasswordForm;
+
+  if (loginCard) loginCard.hidden = card !== "login";
+  if (forgotCard) forgotCard.hidden = card !== "forgot";
+  if (resetCard) resetCard.hidden = card !== "reset";
+
+  ["loginError", "forgotPasswordMessage", "resetPasswordMessage"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = "";
+  });
+
+  refreshIcons();
 }
 
 function showApp() {
@@ -250,7 +268,12 @@ const elements = {
   scheduleComponentSelect: document.querySelector("#scheduleComponentSelect"),
   salesComponentSelect: document.querySelector("#salesComponentSelect"),
   loginForm: document.querySelector("#loginForm"),
-  logoutButton: document.querySelector("#logoutButton"),
+forgotPasswordForm: document.querySelector("#forgotPasswordForm"),
+resetPasswordForm: document.querySelector("#resetPasswordForm"),
+forgotPasswordLink: document.querySelector("#forgotPasswordLink"),
+backToLoginFromForgot: document.querySelector("#backToLoginFromForgot"),
+backToLoginFromReset: document.querySelector("#backToLoginFromReset"),
+logoutButton: document.querySelector("#logoutButton"),
   accessUserForm: document.querySelector("#accessUserForm"),
   accessPermissions: document.querySelector("#accessPermissions"),
   accessUserTable: document.querySelector("#accessUserTable"),
@@ -2146,6 +2169,23 @@ function startSaleFromStock(componentCode) {
   form.elements.customer.focus();
 }
 
+async function publicApiRequest(path, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body || {}),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    throw new Error(data.message || `Request failed: ${response.status}`);
+  }
+
+  return data;
+}
+
 async function apiRequest(path, options = {}) {
 const method = options.method || "GET";
 
@@ -2364,6 +2404,92 @@ elements.logoutButton?.addEventListener("click", async () => {
 elements.accessUserForm?.elements.isAdmin.addEventListener("change", () => {
   const selected = [...elements.accessUserForm.querySelectorAll("[name='permissions']:checked")].map((input) => input.value);
   renderPermissionChecks(selected);
+});
+
+document.body.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-toggle-password]");
+  if (!button) return;
+
+  const input = document.getElementById(button.dataset.togglePassword);
+  if (!input) return;
+
+  const isPassword = input.type === "password";
+  input.type = isPassword ? "text" : "password";
+  button.setAttribute("aria-label", isPassword ? "Hide password" : "Show password");
+  button.innerHTML = `<i data-lucide="${isPassword ? "eye-off" : "eye"}"></i>`;
+  refreshIcons();
+});
+
+elements.forgotPasswordLink?.addEventListener("click", () => {
+  elements.forgotPasswordForm?.reset();
+  showAuthCard("forgot");
+});
+
+elements.backToLoginFromForgot?.addEventListener("click", () => {
+  showLogin("");
+});
+
+elements.backToLoginFromReset?.addEventListener("click", () => {
+  window.history.replaceState({}, "", window.location.pathname);
+  showLogin("");
+});
+
+elements.forgotPasswordForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = document.getElementById("forgotPasswordMessage");
+
+  try {
+    const data = formData(form);
+    const result = await publicApiRequest("/forgot-password", {
+      username: data.username,
+    });
+
+    if (message) {
+      message.style.color = "var(--ok)";
+      message.textContent = result.message || "If this login exists, reset instructions have been sent.";
+    }
+    form.reset();
+  } catch (error) {
+    console.error(error);
+    if (message) {
+      message.style.color = "var(--danger)";
+      message.textContent = error.message || "Password reset request failed";
+    }
+  }
+});
+
+elements.resetPasswordForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = document.getElementById("resetPasswordMessage");
+
+  try {
+    const data = formData(form);
+    const result = await publicApiRequest("/reset-password", {
+      token: data.token,
+      password: data.password,
+      confirmPassword: data.confirmPassword,
+    });
+
+    if (message) {
+      message.style.color = "var(--ok)";
+      message.textContent = result.message || "Password reset successfully.";
+    }
+
+    form.reset();
+    window.history.replaceState({}, "", window.location.pathname);
+
+    setTimeout(() => {
+      showLogin("Password reset successfully. Please login.");
+    }, 1200);
+  } catch (error) {
+    console.error(error);
+    if (message) {
+      message.style.color = "var(--danger)";
+      message.textContent = error.message || "Password reset failed";
+    }
+  }
 });
 
 elements.cancelUserEdit?.addEventListener("click", resetAccessForm);
@@ -2881,6 +3007,20 @@ initFormLaunchers();
 setDefaultDates();
 
 (async function initAuth() {
+  const resetToken = new URLSearchParams(window.location.search).get("resetToken");
+
+  if (resetToken) {
+    clearApiToken();
+    currentUser = null;
+    document.body.classList.remove("auth-loading", "auth-ready");
+    document.body.classList.add("auth-login");
+    showAuthCard("reset");
+    if (elements.resetPasswordForm) {
+      elements.resetPasswordForm.elements.token.value = resetToken;
+    }
+    return;
+  }
+
   try {
     await loadCurrentUser();
     showApp();
